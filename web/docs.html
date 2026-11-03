@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>B2BWork Login API Docs</title>
+  <link rel="preconnect" href="https://fonts.loli.net" />
+  <link rel="preconnect" href="https://gstatic.loli.net" crossorigin />
+  <link href="https://fonts.loli.net/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #f3f6fb;
+      --panel: #fff;
+      --line: #d5deeb;
+      --text: #1a2b45;
+      --muted: #6b7c96;
+      --accent: #2f6fed;
+      --accent-soft: #e8f0fe;
+      --accent-2: #1a56db;
+      --radius: 2px;
+      --sidebar-w: 240px;
+      --mono: "IBM Plex Mono", ui-monospace, monospace;
+      --sans: "IBM Plex Sans", "PingFang SC", "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      font-family: var(--sans);
+      color: var(--text);
+      background: var(--bg);
+      line-height: 1.55;
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+      width: 100%;
+      min-height: 100dvh;
+    }
+    .sidebar {
+      position: sticky;
+      top: 0;
+      height: 100dvh;
+      overflow: auto;
+      background: #fff;
+      border-right: 1px solid var(--line);
+      padding: 16px 12px 28px;
+      width: var(--sidebar-w);
+    }
+    .side-brand {
+      display: flex; gap: 10px; align-items: center;
+      padding: 4px 8px 14px; border-bottom: 1px solid var(--line); margin-bottom: 12px;
+    }
+    .mark {
+      width: 32px; height: 32px; border-radius: var(--radius);
+      display: grid; place-items: center; background: var(--accent); color: #fff;
+      font-weight: 700; font-size: 11px; flex: 0 0 auto;
+    }
+    .side-brand strong { display: block; font-size: 14px; }
+    .side-brand span { color: var(--muted); font-size: 11px; }
+    .nav-group { margin-bottom: 14px; }
+    .nav-group h4 {
+      margin: 0 8px 6px; font-size: 11px; font-weight: 600;
+      color: var(--muted); letter-spacing: 0.04em; text-transform: uppercase;
+    }
+    .nav-group a {
+      display: block; padding: 6px 8px; border-radius: var(--radius);
+      color: var(--text); text-decoration: none; font-size: 13px;
+    }
+    .nav-group a:hover,
+    .nav-group a.active { background: var(--accent-soft); color: var(--accent-2); }
+    .content {
+      min-width: 0;
+      width: 100%;
+      padding: 20px 32px 56px;
+      background: linear-gradient(180deg, #eaf1fb 0%, var(--bg) 180px);
+    }
+    .content-inner {
+      width: 100%;
+      max-width: none;
+    }
+    .topbar {
+      display: flex; justify-content: space-between; align-items: center; gap: 12px;
+      margin-bottom: 18px;
+    }
+    h1 { margin: 0; font-size: 22px; }
+    .sub { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+    a.btn {
+      display: inline-flex; align-items: center; height: 32px; padding: 0 12px;
+      border: 1px solid var(--line); border-radius: var(--radius);
+      text-decoration: none; color: var(--text); background: #fff; font-size: 13px;
+      white-space: nowrap;
+    }
+    section.doc {
+      background: var(--panel); border: 1px solid var(--line);
+      border-radius: var(--radius); padding: 18px 20px; margin-bottom: 14px;
+      scroll-margin-top: 16px;
+    }
+    h2 { margin: 0 0 12px; font-size: 16px; color: var(--accent-2); }
+    h3 { margin: 18px 0 8px; font-size: 14px; }
+    h3:first-of-type { margin-top: 8px; }
+    p, li { font-size: 14px; }
+    .muted { color: var(--muted); }
+    code, pre {
+      font-family: var(--mono); font-size: 12px;
+      background: #f7f9fc; border: 1px solid var(--line); border-radius: var(--radius);
+    }
+    code { padding: 1px 5px; }
+    pre { padding: 12px; overflow: auto; white-space: pre-wrap; word-break: break-word; margin: 8px 0 0; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 8px 0 0; }
+    th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
+    th { background: #f7f9fc; color: var(--muted); font-weight: 600; }
+    .method {
+      display: inline-block; min-width: 58px; text-align: center;
+      padding: 2px 6px; border-radius: var(--radius); color: #fff; font-weight: 600; font-size: 11px;
+      margin-right: 6px; vertical-align: middle;
+    }
+    .get { background: #1a7f4b; }
+    .post { background: #2f6fed; }
+    .put { background: #b7791f; }
+    .del { background: #d14343; }
+    .ws { background: #7c3aed; }
+    .tag {
+      display: inline-block; padding: 1px 6px; border-radius: var(--radius);
+      font-size: 11px; font-weight: 600; border: 1px solid var(--line);
+    }
+    .tag-run { background: var(--accent-soft); color: var(--accent); border-color: #bfd0f5; }
+    .tag-wait { background: #fff7e8; color: #b7791f; border-color: #efd7a3; }
+    .tag-ok { background: #eaf7f0; color: #1a7f4b; border-color: #b7e0c8; }
+    .tag-bad { background: #fdeeee; color: #d14343; border-color: #f0c4c4; }
+    .endpoint { font-family: var(--mono); font-size: 13px; }
+    @media (max-width: 900px) {
+      .layout { grid-template-columns: 1fr; }
+      .sidebar {
+        position: relative; height: auto; max-height: none;
+        border-right: 0; border-bottom: 1px solid var(--line);
+      }
+      .content { padding: 16px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="side-brand">
+        <span class="mark">BW</span>
+        <div>
+          <strong>API Docs</strong>
+          <span>v0.3</span>
+        </div>
+      </div>
+      <nav>
+        <div class="nav-group">
+          <h4>概览</h4>
+          <a href="#intro">介绍</a>
+          <a href="#auth">鉴权</a>
+          <a href="#flow">登录流程</a>
+        </div>
+        <div class="nav-group">
+          <h4>数据模型</h4>
+          <a href="#status">会话 status</a>
+          <a href="#error-codes">error.code</a>
+          <a href="#challenge">challenge</a>
+          <a href="#session-object">Session 对象</a>
+        </div>
+        <div class="nav-group">
+          <h4>会话 API</h4>
+          <a href="#create-session">POST /v1/sessions</a>
+          <a href="#get-session">GET /v1/sessions/{id}</a>
+          <a href="#get-challenge">GET .../challenge</a>
+          <a href="#submit-captcha">POST .../captcha</a>
+          <a href="#cancel-session">DELETE /v1/sessions/{id}</a>
+          <a href="#queue">GET /v1/queue</a>
+        </div>
+        <div class="nav-group">
+          <h4>控制台 / 日志</h4>
+          <a href="#bootstrap">GET /v1/console/bootstrap</a>
+          <a href="#console-settings">GET/PUT settings</a>
+          <a href="#logs">WS /v1/logs</a>
+          <a href="#vnc">VNC 代理 /vnc</a>
+        </div>
+        <div class="nav-group">
+          <h4>回调</h4>
+          <a href="#webhook">Webhook 事件</a>
+        </div>
+        <div class="nav-group">
+          <h4>其它</h4>
+          <a href="#examples">curl 示例</a>
+          <a href="#retention">数据保留</a>
+        </div>
+      </nav>
+    </aside>
+
+    <main class="content">
+      <div class="content-inner">
+        <div class="topbar">
+          <div>
+            <h1>B2BWork Login API</h1>
+            <p class="sub">异步登录队列 · 人工挑战 · Webhook · Console / VNC</p>
+          </div>
+          <a class="btn" href="/ui/">打开控制台</a>
+        </div>
+
+        <section class="doc" id="intro">
+          <h2>介绍</h2>
+          <p>本服务提供「入队 → 单 worker 执行 Playwright 登录 → 必要时人工验证码/扫码 → 回写 cookie / 失败原因」的完整链路。</p>
+          <table>
+            <tr><th>入口</th><th>说明</th></tr>
+            <tr><td><code>/ui/</code></td><td>Web 控制台（Basic）</td></tr>
+            <tr><td><code>/docs.html</code></td><td>本文档（公开）</td></tr>
+            <tr><td><code>/health</code></td><td>健康检查（公开）</td></tr>
+            <tr><td><code>/vnc/...</code></td><td>noVNC 同源代理（Basic）</td></tr>
+            <tr><td><code>/v1/*</code></td><td>业务 API（Bearer 或 Basic）</td></tr>
+          </table>
+        </section>
+
+        <section class="doc" id="auth">
+          <h2>鉴权</h2>
+          <h3>HTTP Basic（控制台 / VNC）</h3>
+          <p>环境变量 <code>BASIC_AUTH_USER</code>、<code>BASIC_AUTH_PASSWORD</code> 同时非空时启用。保护：</p>
+          <ul>
+            <li><code>/ui/*</code> 控制台静态页</li>
+            <li><code>/vnc/*</code> VNC 代理（含 websocket）</li>
+            <li>也可用于调用 <code>/v1/*</code></li>
+          </ul>
+          <p class="muted">启用 Basic 后，x11vnc 可无密码；请勿对外暴露 7900，统一走 <code>/vnc</code>。</p>
+
+          <h3>Bearer Token（程序调用）</h3>
+          <pre>Authorization: Bearer &lt;API_TOKEN&gt;</pre>
+          <p><code>API_TOKEN</code> 来自环境变量，默认示例为 <code>dev-token-change-me</code>。</p>
+
+          <h3>规则摘要</h3>
+          <table>
+            <tr><th>路径</th><th>鉴权</th></tr>
+            <tr><td><code>/health</code>、<code>/docs.html</code>、<code>/v1/console/bootstrap</code></td><td>公开</td></tr>
+            <tr><td><code>/ui</code>、<code>/vnc</code></td><td>仅 Basic（启用时）</td></tr>
+            <tr><td><code>/v1/*</code>（除 bootstrap）</td><td>Bearer <strong>或</strong> Basic</td></tr>
+            <tr><td><code>WS /v1/logs</code></td><td><code>?token=</code> / Bearer 头 / Basic 头</td></tr>
+          </table>
+        </section>
+
+        <section class="doc" id="flow">
+          <h2>登录流程</h2>
+          <ol>
+            <li><code>POST /v1/sessions</code> 入队，返回 <code>id</code> 与 <code>queue_position</code>。</li>
+            <li>worker 认领任务，状态变为 <code>running</code>。</li>
+            <li>若需图片验证码 → <code>waiting_captcha</code>，客户端提交验证码。</li>
+            <li>若需安全扫码 → <code>waiting_security</code>，展示二维码等待扫码。</li>
+            <li>成功 → <code>succeeded</code> + <code>result.cookies</code>；失败 → <code>failed</code> + <code>error</code>。</li>
+            <li>若创建时带了 <code>webhook_url</code>，等待/终态会回调。</li>
+          </ol>
+          <p><code>silent=true</code> 时：一旦需要人工介入（验证码 / 扫码 / 滑块），立即失败并处理下一个任务。</p>
+        </section>
+
+        <section class="doc" id="status">
+          <h2>会话 status 枚举</h2>
+          <table>
+            <tr><th>值</th><th>类型</th><th>说明</th></tr>
+            <tr>
+              <td><code>queued</code> <span class="tag tag-run">进行中</span></td>
+              <td>活跃</td>
+              <td>已入队，等待 worker 认领。可按 priority / 创建时间排序。</td>
+            </tr>
+            <tr>
+              <td><code>running</code> <span class="tag tag-run">进行中</span></td>
+              <td>活跃</td>
+              <td>正在执行自动登录（打开页面、填表、轮询结果）。</td>
+            </tr>
+            <tr>
+              <td><code>waiting_captcha</code> <span class="tag tag-wait">等待</span></td>
+              <td>活跃</td>
+              <td>需要人工图片验证码。见 challenge.type=<code>captcha_image</code>。用 <code>POST .../captcha</code> 提交。</td>
+            </tr>
+            <tr>
+              <td><code>waiting_security</code> <span class="tag tag-wait">等待</span></td>
+              <td>活跃</td>
+              <td>需要安全扫码。见 challenge.type=<code>security_qr</code>，使用 <code>qr_content</code>（不返回图片）。扫码成功后页面跳转，worker 自动继续。</td>
+            </tr>
+            <tr>
+              <td><code>succeeded</code> <span class="tag tag-ok">终态</span></td>
+              <td>终态</td>
+              <td>登录成功。<code>result.cookies</code> 有值；密码字段已清空。</td>
+            </tr>
+            <tr>
+              <td><code>failed</code> <span class="tag tag-bad">终态</span></td>
+              <td>终态</td>
+              <td>登录失败。<code>error.code</code> / <code>error.message</code> 说明原因。</td>
+            </tr>
+            <tr>
+              <td><code>cancelled</code> <span class="tag tag-bad">终态</span></td>
+              <td>终态</td>
+              <td>被取消，或同用户名新会话覆盖旧会话。</td>
+            </tr>
+          </table>
+          <p class="muted">活跃状态：queued / running / waiting_captcha / waiting_security。终态：succeeded / failed / cancelled。</p>
+        </section>
+
+        <section class="doc" id="error-codes">
+          <h2>error.code 枚举</h2>
+          <p>出现在 Session 的 <code>error</code> 字段，以及 webhook <code>session.finished</code> 的 <code>error</code>：</p>
+          <pre>{ "code": "bad_credentials", "message": "用户名密码错误" }</pre>
+          <table>
+            <tr><th>code</th><th>说明</th></tr>
+            <tr><td><code>bad_credentials</code></td><td>用户名或密码错误</td></tr>
+            <tr><td><code>captcha_required</code></td><td>静默模式：需要图片验证码，已跳过</td></tr>
+            <tr><td><code>security_required</code></td><td>静默模式：需要安全扫码，已跳过</td></tr>
+            <tr><td><code>slider_required</code></td><td>需要滑块验证（无法自动完成）</td></tr>
+            <tr><td><code>captcha_timeout</code></td><td>验证码人工等待超时</td></tr>
+            <tr><td><code>security_timeout</code></td><td>安全扫码等待超时</td></tr>
+            <tr><td><code>timeout</code></td><td>整体登录超时</td></tr>
+            <tr><td><code>unknown_state</code></td><td>页面状态无法判定</td></tr>
+            <tr><td><code>other_page_error</code></td><td>页面可见错误文案（message 带详情）</td></tr>
+            <tr><td><code>cancelled</code></td><td>取消 / 被新会话覆盖</td></tr>
+            <tr><td><code>login_error</code></td><td>通用登录失败（含重试用尽）</td></tr>
+            <tr><td><code>browser_error</code></td><td>浏览器会话不可用且重试用尽</td></tr>
+          </table>
+        </section>
+
+        <section class="doc" id="challenge">
+          <h2>challenge 结构</h2>
+          <p>仅在 <code>waiting_captcha</code> / <code>waiting_security</code> 时有值；其它状态多为 <code>null</code>。</p>
+
+          <h3>API 返回（GET session / GET challenge）</h3>
+          <p><strong>图片验证码</strong>（带图）：</p>
+          <pre>{
+  "type": "captcha_image",
+  "qr_content": null,
+  "expires_at": "2026-11-03T15:30:00Z",
+  "image_base64": "data:image/png;base64,iVBOR..."
+}</pre>
+          <p><strong>安全扫码</strong>（只返回内容，不返回图片）：</p>
+          <pre>{
+  "type": "security_qr",
+  "qr_content": "https://wappass.baidu.com/...",
+  "expires_at": "2026-11-03T15:30:00Z",
+  "image_base64": null
+}</pre>
+          <table>
+            <tr><th>字段</th><th>类型</th><th>说明</th></tr>
+            <tr><td><code>type</code></td><td>string</td><td>见下方 type 枚举</td></tr>
+            <tr><td><code>qr_content</code></td><td>string \| null</td><td>安全扫码必用；验证码场景为 null</td></tr>
+            <tr><td><code>expires_at</code></td><td>string</td><td>UTC ISO 时间，后缀 Z</td></tr>
+            <tr><td><code>image_base64</code></td><td>string \| null</td><td>仅 <code>captcha_image</code> 有值；<code>security_qr</code> 恒为 null</td></tr>
+          </table>
+
+          <h3>challenge.type 枚举</h3>
+          <table>
+            <tr><th>值</th><th>对应 status</th><th>说明</th></tr>
+            <tr><td><code>captcha_image</code></td><td>waiting_captcha</td><td>图片验证码；看 image_base64，用 POST captcha 提交</td></tr>
+            <tr><td><code>security_qr</code></td><td>waiting_security</td><td>安全扫码；<strong>以 qr_content 为准</strong>，客户端自行生成二维码，不返回图片</td></tr>
+          </table>
+
+          <h3>Webhook 中的 challenge</h3>
+          <pre>{
+  "type": "security_qr",
+  "qr_content": "https://...",
+  "expires_at": "2026-11-03T15:30:00Z",
+  "image_available": false
+}</pre>
+          <p class="muted"><code>image_available</code> 仅在 <code>captcha_image</code> 时可能为 true。</p>
+        </section>
+
+        <section class="doc" id="session-object">
+          <h2>Session 对象</h2>
+          <p><code>GET /v1/sessions/{id}</code> 响应体：</p>
+          <pre>{
+  "id": "a1b2c3...",
+  "status": "waiting_security",
+  "username": "acct",
+  "client_ref": "order-001",
+  "priority": 1,
+  "silent": false,
+  "created_at": "2026-11-03T14:00:00Z",
+  "updated_at": "2026-11-03T14:01:10Z",
+  "finished_at": null,
+  "challenge": { "...见 challenge..." },
+  "result": null,
+  "error": null
+}</pre>
+          <table>
+            <tr><th>字段</th><th>类型</th><th>说明</th></tr>
+            <tr><td>id</td><td>string</td><td>会话 ID（hex）</td></tr>
+            <tr><td>status</td><td>string</td><td>见 status 枚举</td></tr>
+            <tr><td>username</td><td>string</td><td>登录账号（不含密码）</td></tr>
+            <tr><td>client_ref</td><td>string \| null</td><td>业务侧单号</td></tr>
+            <tr><td>priority</td><td>int</td><td>≥1，越大越优先</td></tr>
+            <tr><td>silent</td><td>bool</td><td>静默模式</td></tr>
+            <tr><td>created_at / updated_at / finished_at</td><td>string</td><td>UTC ISO</td></tr>
+            <tr><td>challenge</td><td>object \| null</td><td>人工挑战</td></tr>
+            <tr><td>result</td><td>object \| null</td><td>成功时 <code>{"cookies":[...]}</code></td></tr>
+            <tr><td>error</td><td>object \| null</td><td><code>{"code","message"}</code></td></tr>
+          </table>
+        </section>
+
+        <section class="doc" id="create-session">
+          <h2><span class="method post">POST</span> <span class="endpoint">/v1/sessions</span></h2>
+          <p>创建登录任务，HTTP <code>202</code>。同 username 会取消旧的未终态会话。</p>
+          <h3>请求体</h3>
+          <pre>{
+  "username": "acct",
+  "password": "secret",
+  "webhook_url": "https://example.com/hook",
+  "priority": 1,
+  "client_ref": "order-001",
+  "silent": false
+}</pre>
+          <table>
+            <tr><th>字段</th><th>必填</th><th>说明</th></tr>
+            <tr><td>username</td><td>是</td><td>非空</td></tr>
+            <tr><td>password</td><td>是</td><td>非空；终态后服务端清空存储</td></tr>
+            <tr><td>webhook_url</td><td>否</td><td>回调地址</td></tr>
+            <tr><td>priority</td><td>否</td><td>默认 1，≥1</td></tr>
+            <tr><td>client_ref</td><td>否</td><td>业务引用</td></tr>
+            <tr><td>silent</td><td>否</td><td>默认 false</td></tr>
+          </table>
+          <h3>响应</h3>
+          <pre>{
+  "id": "a1b2c3...",
+  "status": "queued",
+  "queue_position": 1
+}</pre>
+        </section>
+
+        <section class="doc" id="get-session">
+          <h2><span class="method get">GET</span> <span class="endpoint">/v1/sessions/{id}</span></h2>
+          <p>查询完整 Session 对象。不存在返回 <code>404</code>。</p>
+        </section>
+
+        <section class="doc" id="get-challenge">
+          <h2><span class="method get">GET</span> <span class="endpoint">/v1/sessions/{id}/challenge</span></h2>
+          <p>仅在 waiting_* 且存在 challenge 时返回，否则 <code>404</code>。</p>
+          <pre>{
+  "session_id": "a1b2c3...",
+  "status": "waiting_security",
+  "challenge": {
+    "type": "security_qr",
+    "qr_content": "https://...",
+    "expires_at": "2026-11-03T15:30:00Z",
+    "image_base64": null
+  }
+}</pre>
+        </section>
+
+        <section class="doc" id="submit-captcha">
+          <h2><span class="method post">POST</span> <span class="endpoint">/v1/sessions/{id}/captcha</span></h2>
+          <p>仅当 status=<code>waiting_captcha</code> 时可提交，否则 <code>409</code>。</p>
+          <pre>{ "code": "1234" }</pre>
+          <p>成功返回更新后的 Session 对象；worker 会读取验证码并继续登录。</p>
+        </section>
+
+        <section class="doc" id="cancel-session">
+          <h2><span class="method del">DELETE</span> <span class="endpoint">/v1/sessions/{id}</span></h2>
+          <p>取消会话。queued 立即 cancelled；running/waiting 标记 cancel_requested，worker 尽快退出。</p>
+        </section>
+
+        <section class="doc" id="queue">
+          <h2><span class="method get">GET</span> <span class="endpoint">/v1/queue</span></h2>
+          <pre>{
+  "queued": 2,
+  "running": 1,
+  "waiting": 1,
+  "retrying": 0
+}</pre>
+          <table>
+            <tr><th>字段</th><th>说明</th></tr>
+            <tr><td>queued</td><td>排队中</td></tr>
+            <tr><td>running</td><td>执行中</td></tr>
+            <tr><td>waiting</td><td>waiting_captcha + waiting_security</td></tr>
+            <tr><td>retrying</td><td>预留，当前恒为 0</td></tr>
+          </table>
+        </section>
+
+        <section class="doc" id="bootstrap">
+          <h2><span class="method get">GET</span> <span class="endpoint">/v1/console/bootstrap</span></h2>
+          <p>公开接口，供控制台初始化：</p>
+          <pre>{
+  "basic_auth_required": true,
+  "default_vnc_page_url": "/vnc/vnc.html?autoconnect=true&resize=scale&path=vnc/websockify",
+  "api_token_optional": true
+}</pre>
+        </section>
+
+        <section class="doc" id="console-settings">
+          <h2><span class="method get">GET</span> / <span class="method put">PUT</span> <span class="endpoint">/v1/console/settings</span></h2>
+          <p>读写 GUI 设置：VNC 页面 URL、默认 webhook、priority；兼容字段可写 VNC 密码文件（推荐走 Basic+/vnc，无需密码）。</p>
+        </section>
+
+        <section class="doc" id="logs">
+          <h2><span class="method ws">WS</span> <span class="endpoint">/v1/logs</span></h2>
+          <p>实时日志文本流。鉴权：</p>
+          <ul>
+            <li><code>ws://host/v1/logs?token=API_TOKEN</code></li>
+            <li>或同源 Basic（浏览器自动带）</li>
+          </ul>
+        </section>
+
+        <section class="doc" id="vnc">
+          <h2>VNC 代理 <code>/vnc</code></h2>
+          <p>将容器内 <code>http://127.0.0.1:7900</code> 代理到本服务路径，需 Basic。</p>
+          <pre>/vnc/vnc.html?autoconnect=true&amp;resize=scale&amp;path=vnc/websockify</pre>
+          <p class="muted">iframe 与控制台同源，浏览器 Basic 登录一次即可同时访问控制台与 VNC。</p>
+        </section>
+
+        <section class="doc" id="webhook">
+          <h2>Webhook 事件</h2>
+          <p>创建会话时传入 <code>webhook_url</code> 后，服务端 POST JSON，并用 <code>WEBHOOK_SECRET</code> 签名（见实现头字段）。</p>
+          <h3>type 枚举</h3>
+          <table>
+            <tr><th>type</th><th>时机</th><th>要点</th></tr>
+            <tr><td><code>session.waiting_captcha</code></td><td>进入验证码等待</td><td>带精简 challenge</td></tr>
+            <tr><td><code>session.waiting_security</code></td><td>进入扫码等待</td><td>带精简 challenge</td></tr>
+            <tr><td><code>session.finished</code></td><td>终态</td><td>status=succeeded/failed/cancelled；含 result/error</td></tr>
+          </table>
+          <h3>签名头</h3>
+          <table>
+            <tr><th>头</th><th>说明</th></tr>
+            <tr><td><code>X-Timestamp</code></td><td>Unix 秒级时间戳</td></tr>
+            <tr><td><code>X-Signature</code></td><td><code>sha256=</code> + HMAC-SHA256(<code>WEBHOOK_SECRET</code>, <code>"{timestamp}.{body}"</code>)</td></tr>
+            <tr><td><code>Content-Type</code></td><td><code>application/json</code></td></tr>
+          </table>
+          <h3>finished 示例</h3>
+          <pre>{
+  "id": "evt_...",
+  "type": "session.finished",
+  "session_id": "a1b2c3...",
+  "status": "succeeded",
+  "username": "acct",
+  "client_ref": "order-001",
+  "result": { "cookies": [ { "name": "...", "value": "...", "domain": "..." } ] },
+  "error": null
+}</pre>
+        </section>
+
+        <section class="doc" id="examples">
+          <h2>curl 示例</h2>
+          <pre># 创建（静默）
+curl -sS -X POST "$HOST/v1/sessions" \
+  -H "Authorization: Bearer $API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"username":"u","password":"p","silent":true,"client_ref":"t1"}'
+
+# 查询
+curl -sS "$HOST/v1/sessions/$ID" -H "Authorization: Bearer $API_TOKEN"
+
+# 提交验证码
+curl -sS -X POST "$HOST/v1/sessions/$ID/captcha" \
+  -H "Authorization: Bearer $API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"code":"1234"}'
+
+# 队列（Basic）
+curl -sS -u "admin:admin" "$HOST/v1/queue"
+
+# 取消
+curl -sS -X DELETE "$HOST/v1/sessions/$ID" -H "Authorization: Bearer $API_TOKEN"</pre>
+        </section>
+
+        <section class="doc" id="retention">
+          <h2>数据保留</h2>
+          <ul>
+            <li>失败/成功/取消都会以终态留在 SQLite，<strong>不会立刻删除</strong>。</li>
+            <li>worker 启动时按 <code>SESSION_TTL_DAYS</code>（默认 7）清理过期终态记录。</li>
+            <li>终态时清除 password；挑战图片文件会删除。</li>
+          </ul>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    (() => {
+      const links = [...document.querySelectorAll(".sidebar nav a")];
+      const sections = links
+        .map((a) => document.querySelector(a.getAttribute("href")))
+        .filter(Boolean);
+
+      function setActive() {
+        let current = sections[0];
+        for (const sec of sections) {
+          if (sec.getBoundingClientRect().top <= 80) current = sec;
+        }
+        links.forEach((a) => {
+          a.classList.toggle("active", a.getAttribute("href") === `#${current.id}`);
+        });
+      }
+
+      document.addEventListener("scroll", setActive, { passive: true });
+      setActive();
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,26 @@
+services:
+  b2bwork-login:
+    build: .
+    ports:
+      - "8056:8056"
+      # 7900 仅容器内供 /vnc 代理使用，不对外暴露
+    environment:
+      API_TOKEN: ${API_TOKEN:-dev-token-change-me}
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-dev-webhook-secret-change-me}
+      BASIC_AUTH_USER: ${BASIC_AUTH_USER:-admin}
+      BASIC_AUTH_PASSWORD: ${BASIC_AUTH_PASSWORD:-admin}
+      ENABLE_VNC: "true"
+      PLAYWRIGHT_HEADLESS: "false"
+      VNC_PASSWORD: ""
+      VNC_PAGE_URL: ${VNC_PAGE_URL:-/vnc/vnc.html?autoconnect=true&resize=scale&path=vnc/websockify}
+      VNC_UPSTREAM: http://127.0.0.1:7900
+      QUEUE_DB_PATH: /data/queue.db
+      DATA_DIR: /data
+      TZ: Asia/Shanghai
+    volumes:
+      - b2bwork_data:/data
+    shm_size: "2gb"
+    restart: unless-stopped
+
+volumes:
+  b2bwork_data:

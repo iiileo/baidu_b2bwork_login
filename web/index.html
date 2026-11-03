@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>B2BWork Login Console</title>
+  <link rel="preconnect" href="https://fonts.loli.net" />
+  <link rel="preconnect" href="https://gstatic.loli.net" crossorigin />
+  <link href="https://fonts.loli.net/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/ui/styles.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="top">
+      <div class="brand">
+        <span class="mark">BW</span>
+        <div>
+          <strong>B2BWork Login</strong>
+          <p>API Console · Worker · VNC</p>
+        </div>
+      </div>
+      <div class="top-actions">
+        <span id="authModeLabel" class="muted">鉴权检测中…</span>
+        <label class="token-field" id="tokenField">
+          <span>API Token（可选）</span>
+          <input id="apiToken" type="password" autocomplete="off" placeholder="Bearer token" />
+        </label>
+        <button type="button" id="btnSaveToken" class="ghost">保存 Token</button>
+        <button type="button" id="btnSettings" class="ghost">设置</button>
+        <a class="ghost-link" href="/docs.html" target="_blank" rel="noopener">接口文档</a>
+        <span id="healthDot" class="dot" title="health"></span>
+      </div>
+    </header>
+
+    <main class="grid">
+      <section class="panel side-panel">
+        <div class="side-scroll">
+          <h2>提交测试登录</h2>
+          <form id="loginForm" class="form">
+            <label>用户名<input name="username" required autocomplete="username" /></label>
+            <label>密码<input name="password" type="password" required autocomplete="current-password" /></label>
+            <label>Webhook URL（可选）<input name="webhook_url" id="webhookUrl" placeholder="https://..." /></label>
+            <label>client_ref<input name="client_ref" placeholder="可选业务单号" /></label>
+            <label>priority<input name="priority" id="priority" type="number" min="1" value="1" /></label>
+            <label class="check"><input name="silent" type="checkbox" /> 静默（遇人工挑战直接失败并跳过）</label>
+            <button type="submit" class="primary">创建会话</button>
+          </form>
+          <p id="createMsg" class="msg"></p>
+
+          <h2>当前会话</h2>
+          <div class="row">
+            <input id="sessionId" placeholder="session id" />
+            <button type="button" id="btnRefresh" class="ghost">刷新</button>
+            <button type="button" id="btnCancel" class="danger ghost">取消</button>
+          </div>
+          <div id="statusBanner" class="status-banner idle">尚未加载会话</div>
+
+          <div id="challengeBox" class="challenge challenge-slot">
+            <h3>人工挑战</h3>
+            <div id="challengeMeta" class="muted">无挑战</div>
+            <div class="challenge-media">
+              <img id="challengeImg" alt="challenge" class="challenge-img hidden" />
+              <canvas id="qrCanvas" class="hidden"></canvas>
+            </div>
+            <form id="captchaForm" class="form row-form hidden">
+              <input name="code" placeholder="验证码" required />
+              <button type="submit" class="primary">提交验证码</button>
+            </form>
+          </div>
+
+          <div class="json-block">
+            <div class="json-head">
+              <h2>会话 JSON</h2>
+              <div class="row compact">
+                <button type="button" id="btnToggleRawJson" class="ghost">显示完整</button>
+                <button type="button" id="btnCopyJson" class="ghost">复制</button>
+              </div>
+            </div>
+            <pre id="sessionView" class="code json-view"><span class="json-null">尚未加载</span></pre>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel vnc-panel">
+        <div class="vnc-head">
+          <h2>VNC</h2>
+          <div class="row compact">
+            <button type="button" id="btnReloadVnc" class="ghost">重载画面</button>
+            <button type="button" id="btnOpenVnc" class="ghost">新窗口</button>
+          </div>
+        </div>
+        <p id="vncUrlLabel" class="muted mono vnc-url"></p>
+        <div class="vnc-frame-wrap">
+          <iframe id="vncFrame" title="VNC" allow="clipboard-read; clipboard-write"></iframe>
+          <div id="vncEmpty" class="vnc-empty">在「VNC 设置」中配置页面地址后显示</div>
+        </div>
+        <h2>实时日志</h2>
+        <pre id="logView" class="code logs"></pre>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="settingsDialog">
+    <form method="dialog" id="settingsForm" class="form dialog-form">
+      <h2>控制台设置</h2>
+      <label>
+        VNC 页面 URL
+        <input name="vnc_page_url" id="vncPageUrl" placeholder="/vnc/vnc.html?autoconnect=true&resize=scale&path=vnc/websockify" />
+      </label>
+      <p class="hint">推荐同源代理 <code>/vnc/...</code>，由 Basic 账号鉴权，无需 VNC 密码。</p>
+      <div id="vncPasswordBlock" class="hidden">
+        <label>
+          兼容：直连 VNC 密码（仅未走 /vnc 代理时）
+          <input name="vnc_password" id="vncPassword" type="password" placeholder="留空则不修改" autocomplete="new-password" />
+        </label>
+        <label class="check">
+          <input type="checkbox" name="clear_vnc_password" id="clearVncPassword" />
+          清除已保存的 VNC 密码
+        </label>
+        <p id="vncPwdStatus" class="hint"></p>
+      </div>
+      <label>
+        默认 Webhook
+        <input name="default_webhook_url" id="defaultWebhook" />
+      </label>
+      <div class="dialog-actions">
+        <button type="submit" value="cancel" class="ghost">关闭</button>
+        <button type="button" id="btnSaveSettings" class="primary">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="/ui/vendor/qrcode.min.js"></script>
+  <script src="/ui/app.js"></script>
+</body>
+</html>
