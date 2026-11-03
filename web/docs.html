@@ -184,6 +184,12 @@
           <a href="#webhook">Webhook 事件</a>
         </div>
         <div class="nav-group">
+          <h4>部署</h4>
+          <a href="#docker-ghcr">GHCR 镜像使用</a>
+          <a href="#docker-run">docker run</a>
+          <a href="#docker-compose">docker compose</a>
+        </div>
+        <div class="nav-group">
           <h4>其它</h4>
           <a href="#examples">curl 示例</a>
           <a href="#retention">数据保留</a>
@@ -562,6 +568,82 @@ curl -sS -X DELETE "$HOST/v1/sessions/$ID" -H "Authorization: Bearer $API_TOKEN"
             <li>worker 启动时按 <code>SESSION_TTL_DAYS</code>（默认 7）清理过期终态记录。</li>
             <li>终态时清除 password；挑战图片文件会删除。</li>
           </ul>
+        </section>
+
+        <section class="doc" id="docker-ghcr">
+          <h2>GHCR 镜像使用</h2>
+          <p>推送 <code>main</code> 或打 <code>v*</code> tag 后，GitHub Actions 会自动构建并推送到 <strong>GitHub Container Registry</strong>（<code>ghcr.io</code>），架构含 <code>linux/amd64</code> 与 <code>linux/arm64</code>。</p>
+          <table>
+            <tr><th>项</th><th>值</th></tr>
+            <tr><td>Registry</td><td><code>ghcr.io</code></td></tr>
+            <tr><td>镜像名</td><td><code>ghcr.io/&lt;owner&gt;/&lt;repo&gt;</code>（全小写）</td></tr>
+            <tr><td>本仓库示例</td><td><code>ghcr.io/iiileo/baidu_b2bwork_login</code></td></tr>
+            <tr><td>常用 tag</td><td><code>latest</code>（main）、<code>v1.0.0</code>（git tag）、<code>sha-xxxxxx</code></td></tr>
+          </table>
+
+          <h3>拉取</h3>
+          <pre># 公开包可直接拉
+docker pull ghcr.io/iiileo/baidu_b2bwork_login:latest
+
+# 若 Package 为 Private，先登录（PAT 需 read:packages）
+echo YOUR_GITHUB_PAT | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
+docker pull ghcr.io/iiileo/baidu_b2bwork_login:latest</pre>
+          <p class="muted">在 GitHub 仓库右侧 <strong>Packages</strong> 打开对应包 → Package settings → Change visibility，可改为 Public。</p>
+        </section>
+
+        <section class="doc" id="docker-run">
+          <h2>docker run</h2>
+          <pre>docker run -d --name b2bwork-login \
+  --shm-size=2g \
+  -p 8056:8056 \
+  -e API_TOKEN=change-me \
+  -e WEBHOOK_SECRET=change-me \
+  -e BASIC_AUTH_USER=admin \
+  -e BASIC_AUTH_PASSWORD=change-me \
+  -e ENABLE_VNC=true \
+  -e PLAYWRIGHT_HEADLESS=false \
+  -e VNC_PAGE_URL=/vnc/vnc.html?autoconnect=true\&amp;resize=scale\&amp;path=vnc/websockify \
+  -v b2bwork_data:/data \
+  ghcr.io/iiileo/baidu_b2bwork_login:latest</pre>
+          <table>
+            <tr><th>环境变量</th><th>说明</th></tr>
+            <tr><td><code>API_TOKEN</code></td><td>Bearer 调用密钥</td></tr>
+            <tr><td><code>BASIC_AUTH_USER</code> / <code>BASIC_AUTH_PASSWORD</code></td><td>控制台与 /vnc Basic 账号</td></tr>
+            <tr><td><code>WEBHOOK_SECRET</code></td><td>Webhook 签名密钥</td></tr>
+            <tr><td><code>ENABLE_VNC</code></td><td><code>true</code> 开启虚拟显示 + noVNC</td></tr>
+            <tr><td><code>PLAYWRIGHT_HEADLESS</code></td><td>开 VNC 时建议 <code>false</code></td></tr>
+            <tr><td><code>VNC_PAGE_URL</code></td><td>默认走同源 <code>/vnc/...</code></td></tr>
+          </table>
+          <p>访问：控制台 <code>http://主机:8056/ui/</code> · 文档 <code>http://主机:8056/docs.html</code>（仅映射 <strong>8056</strong>，不要暴露 7900）。</p>
+        </section>
+
+        <section class="doc" id="docker-compose">
+          <h2>docker compose</h2>
+          <pre>services:
+  b2bwork-login:
+    image: ghcr.io/iiileo/baidu_b2bwork_login:latest
+    ports:
+      - "8056:8056"
+    environment:
+      API_TOKEN: ${API_TOKEN:-dev-token-change-me}
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-dev-webhook-secret-change-me}
+      BASIC_AUTH_USER: ${BASIC_AUTH_USER:-admin}
+      BASIC_AUTH_PASSWORD: ${BASIC_AUTH_PASSWORD:-admin}
+      ENABLE_VNC: "true"
+      PLAYWRIGHT_HEADLESS: "false"
+      VNC_PASSWORD: ""
+      VNC_PAGE_URL: /vnc/vnc.html?autoconnect=true&amp;resize=scale&amp;path=vnc/websockify
+      QUEUE_DB_PATH: /data/queue.db
+      DATA_DIR: /data
+      TZ: Asia/Shanghai
+    volumes:
+      - b2bwork_data:/data
+    shm_size: "2gb"
+    restart: unless-stopped
+
+volumes:
+  b2bwork_data:</pre>
+          <pre>docker compose up -d</pre>
         </section>
       </div>
     </main>

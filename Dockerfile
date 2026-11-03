@@ -1,4 +1,10 @@
-FROM mcr.azure.cn/playwright/python:v1.64.1-noble
+# 国内默认用 azure.cn；GitHub Actions 通过 build-arg 切到 mcr.microsoft.com
+ARG PLAYWRIGHT_IMAGE=mcr.azure.cn/playwright/python:v1.64.1-noble
+FROM ${PLAYWRIGHT_IMAGE}
+
+ARG USE_CHINA_MIRROR=1
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple/
+ARG PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -12,26 +18,28 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     DISPLAY=:99 \
     API_HOST=0.0.0.0 \
     API_PORT=8056 \
-    VNC_PAGE_URL=http://127.0.0.1:7900/vnc.html?autoconnect=true&resize=scale \
+    VNC_PAGE_URL=/vnc/vnc.html?autoconnect=true&resize=scale&path=vnc/websockify \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple/ \
-    PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
+    PIP_INDEX_URL=${PIP_INDEX_URL} \
+    PIP_TRUSTED_HOST=${PIP_TRUSTED_HOST}
 
 WORKDIR /app
 
 RUN set -eux; \
-    find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) -exec sed -i \
-      -e 's|http://archive.ubuntu.com/ubuntu|https://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' \
-      -e 's|https://archive.ubuntu.com/ubuntu|https://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' \
-      -e 's|http://security.ubuntu.com/ubuntu|https://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' \
-      -e 's|https://security.ubuntu.com/ubuntu|https://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' \
-      -e 's|http://ports.ubuntu.com/ubuntu-ports|https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports|g' \
-      -e 's|https://ports.ubuntu.com/ubuntu-ports|https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports|g' \
-      -e 's|http://azure.archive.ubuntu.com/ubuntu|https://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' \
-      -e 's|https://azure.archive.ubuntu.com/ubuntu|https://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' \
-      -e 's|http://azure.ports.ubuntu.com/ubuntu-ports|https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports|g' \
-      -e 's|https://azure.ports.ubuntu.com/ubuntu-ports|https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports|g' \
-      {} +; \
+    if [ "${USE_CHINA_MIRROR}" = "1" ]; then \
+      find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) -exec sed -i \
+        -e 's|http://archive.ubuntu.com/ubuntu|https://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' \
+        -e 's|https://archive.ubuntu.com/ubuntu|https://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' \
+        -e 's|http://security.ubuntu.com/ubuntu|https://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' \
+        -e 's|https://security.ubuntu.com/ubuntu|https://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' \
+        -e 's|http://ports.ubuntu.com/ubuntu-ports|https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports|g' \
+        -e 's|https://ports.ubuntu.com/ubuntu-ports|https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports|g' \
+        -e 's|http://azure.archive.ubuntu.com/ubuntu|https://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' \
+        -e 's|https://azure.archive.ubuntu.com/ubuntu|https://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' \
+        -e 's|http://azure.ports.ubuntu.com/ubuntu-ports|https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports|g' \
+        -e 's|https://azure.ports.ubuntu.com/ubuntu-ports|https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports|g' \
+        {} +; \
+    fi; \
     apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       xvfb \
       x11vnc \

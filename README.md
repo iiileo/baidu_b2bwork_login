@@ -55,7 +55,7 @@ uv run python main.py
 
 ## Docker（API + Worker + noVNC）
 
-基础镜像：`mcr.azure.cn/playwright/python:v1.64.1-noble`。
+基础镜像：`mcr.azure.cn/playwright/python:v1.64.1-noble`（本地/国内）。
 
 ```bash
 docker compose up --build
@@ -65,3 +65,40 @@ docker compose up --build
 - Basic 默认 `admin` / `admin`，请在环境变量中修改
 - 数据卷：`/data`
 - `shm_size: 2gb`
+
+### GitHub Actions → GHCR（`ghcr.io`）
+
+推送 `main` 或打 `v*` tag 时自动构建并推送到 **GitHub Container Registry**（`linux/amd64` + `linux/arm64`）。使用内置 `GITHUB_TOKEN`，无需 Docker Hub Secret。
+
+#### 拉取
+
+```bash
+docker pull ghcr.io/iiileo/baidu_b2bwork_login:latest
+
+# Private 包需先登录（PAT 含 read:packages）
+echo YOUR_GITHUB_PAT | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
+```
+
+可在 GitHub → **Packages** 将包设为 Public。
+
+#### 运行
+
+```bash
+docker run -d --name b2bwork-login \
+  --shm-size=2g \
+  -p 8056:8056 \
+  -e API_TOKEN=change-me \
+  -e WEBHOOK_SECRET=change-me \
+  -e BASIC_AUTH_USER=admin \
+  -e BASIC_AUTH_PASSWORD=change-me \
+  -e ENABLE_VNC=true \
+  -e PLAYWRIGHT_HEADLESS=false \
+  -v b2bwork_data:/data \
+  ghcr.io/iiileo/baidu_b2bwork_login:latest
+```
+
+- 控制台：`http://localhost:8056/ui/`
+- 文档：`http://localhost:8056/docs.html`
+- 也可用 compose：把 `build: .` 换成 `image: ghcr.io/iiileo/baidu_b2bwork_login:latest`
+
+更完整说明见线上 `/docs.html` →「部署」。
