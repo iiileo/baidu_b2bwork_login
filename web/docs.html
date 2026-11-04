@@ -212,24 +212,25 @@
           <p>本服务提供「入队 → 单 worker 执行 Playwright 登录 → 必要时人工验证码/扫码 → 回写 cookie / 失败原因」的完整链路。</p>
           <table>
             <tr><th>入口</th><th>说明</th></tr>
-            <tr><td><code>/ui/</code></td><td>Web 控制台（Basic）</td></tr>
+            <tr><td><code>/login</code></td><td>控制台登录页</td></tr>
+            <tr><td><code>/ui/</code></td><td>Web 控制台（需登录 Cookie）</td></tr>
             <tr><td><code>/docs.html</code></td><td>本文档（公开）</td></tr>
             <tr><td><code>/health</code></td><td>健康检查（公开）</td></tr>
-            <tr><td><code>/vnc/...</code></td><td>noVNC 同源代理（Basic）</td></tr>
-            <tr><td><code>/v1/*</code></td><td>业务 API（Bearer 或 Basic）</td></tr>
+            <tr><td><code>/vnc/...</code></td><td>noVNC 同源代理（需登录 Cookie）</td></tr>
+            <tr><td><code>/v1/*</code></td><td>业务 API（Bearer 或 Cookie）</td></tr>
           </table>
         </section>
 
         <section class="doc" id="auth">
           <h2>鉴权</h2>
-          <h3>HTTP Basic（控制台 / VNC）</h3>
-          <p>环境变量 <code>BASIC_AUTH_USER</code>、<code>BASIC_AUTH_PASSWORD</code> 同时非空时启用。保护：</p>
+          <h3>控制台表单登录（Cookie）</h3>
+          <p>环境变量 <code>BASIC_AUTH_USER</code>、<code>BASIC_AUTH_PASSWORD</code> 同时非空时启用。访问 <code>/login</code> 提交账号，服务端写入 HttpOnly Cookie <code>bw_console_session</code>。</p>
           <ul>
-            <li><code>/ui/*</code> 控制台静态页</li>
-            <li><code>/vnc/*</code> VNC 代理（含 websocket）</li>
-            <li>也可用于调用 <code>/v1/*</code></li>
+            <li><code>POST /v1/auth/login</code> · <code>POST /v1/auth/logout</code> · <code>GET /v1/auth/me</code></li>
+            <li>保护 <code>/ui/*</code>、<code>/vnc/*</code>（未登录跳转 <code>/login</code>）</li>
+            <li>同一 Cookie 也可调用 <code>/v1/*</code></li>
           </ul>
-          <p class="muted">启用 Basic 后，x11vnc 可无密码；请勿对外暴露 7900，统一走 <code>/vnc</code>。</p>
+          <p class="muted">启用后 x11vnc 可无密码；请勿对外暴露 7900，统一走 <code>/vnc</code>。</p>
 
           <h3>Bearer Token（程序调用）</h3>
           <pre>Authorization: Bearer &lt;API_TOKEN&gt;</pre>
@@ -238,10 +239,10 @@
           <h3>规则摘要</h3>
           <table>
             <tr><th>路径</th><th>鉴权</th></tr>
-            <tr><td><code>/health</code>、<code>/docs.html</code>、<code>/v1/console/bootstrap</code></td><td>公开</td></tr>
-            <tr><td><code>/ui</code>、<code>/vnc</code></td><td>仅 Basic（启用时）</td></tr>
-            <tr><td><code>/v1/*</code>（除 bootstrap）</td><td>Bearer <strong>或</strong> Basic</td></tr>
-            <tr><td><code>WS /v1/logs</code></td><td><code>?token=</code> / Bearer 头 / Basic 头</td></tr>
+            <tr><td><code>/login</code>、<code>/health</code>、<code>/docs.html</code>、<code>/v1/console/bootstrap</code>、<code>/v1/auth/*</code></td><td>公开（login 写 Cookie）</td></tr>
+            <tr><td><code>/ui</code>、<code>/vnc</code></td><td>登录 Cookie（启用时）</td></tr>
+            <tr><td><code>/v1/*</code>（除 bootstrap / auth）</td><td>Bearer <strong>或</strong> Cookie</td></tr>
+            <tr><td><code>WS /v1/logs</code></td><td><code>?token=</code> / Bearer / Cookie</td></tr>
           </table>
         </section>
 
@@ -315,6 +316,7 @@
             <tr><td><code>security_timeout</code></td><td>安全扫码等待超时</td></tr>
             <tr><td><code>timeout</code></td><td>整体登录超时</td></tr>
             <tr><td><code>unknown_state</code></td><td>页面状态无法判定</td></tr>
+            <tr><td><code>login_page_stuck</code></td><td>卡在登录页无跳转/无挑战</td></tr>
             <tr><td><code>other_page_error</code></td><td>页面可见错误文案（message 带详情）</td></tr>
             <tr><td><code>cancelled</code></td><td>取消 / 被新会话覆盖</td></tr>
             <tr><td><code>login_error</code></td><td>通用登录失败（含重试用尽）</td></tr>
@@ -461,11 +463,13 @@
 
         <section class="doc" id="queue">
           <h2><span class="method get">GET</span> <span class="endpoint">/v1/queue</span></h2>
+          <p>队列计数；另含 <code>current_session_id</code>（当前 running / waiting 会话，供控制台跟随）。</p>
           <pre>{
   "queued": 2,
   "running": 1,
   "waiting": 1,
-  "retrying": 0
+  "retrying": 0,
+  "current_session_id": "abc123..."
 }</pre>
           <table>
             <tr><th>字段</th><th>说明</th></tr>
@@ -473,6 +477,7 @@
             <tr><td>running</td><td>执行中</td></tr>
             <tr><td>waiting</td><td>waiting_captcha + waiting_security</td></tr>
             <tr><td>retrying</td><td>预留，当前恒为 0</td></tr>
+            <tr><td>current_session_id</td><td>当前处理中会话 id（无则 null）</td></tr>
           </table>
         </section>
 
@@ -480,7 +485,8 @@
           <h2><span class="method get">GET</span> <span class="endpoint">/v1/console/bootstrap</span></h2>
           <p>公开接口，供控制台初始化：</p>
           <pre>{
-  "basic_auth_required": true,
+  "login_required": true,
+  "basic_auth_required": false,
   "default_vnc_page_url": "/vnc/vnc.html?autoconnect=true&resize=scale&path=vnc/websockify",
   "api_token_optional": true
 }</pre>
@@ -488,7 +494,7 @@
 
         <section class="doc" id="console-settings">
           <h2><span class="method get">GET</span> / <span class="method put">PUT</span> <span class="endpoint">/v1/console/settings</span></h2>
-          <p>读写 GUI 设置：VNC 页面 URL、默认 webhook、priority；兼容字段可写 VNC 密码文件（推荐走 Basic+/vnc，无需密码）。</p>
+          <p>读写 GUI 设置：VNC 页面 URL、默认 webhook、priority；兼容字段可写 VNC 密码文件（推荐走登录 Cookie + /vnc，无需密码）。</p>
         </section>
 
         <section class="doc" id="logs">
@@ -496,15 +502,15 @@
           <p>实时日志文本流。鉴权：</p>
           <ul>
             <li><code>ws://host/v1/logs?token=API_TOKEN</code></li>
-            <li>或同源 Basic（浏览器自动带）</li>
+            <li>或同源登录 Cookie（浏览器自动带）</li>
           </ul>
         </section>
 
         <section class="doc" id="vnc">
           <h2>VNC 代理 <code>/vnc</code></h2>
-          <p>将容器内 <code>http://127.0.0.1:7900</code> 代理到本服务路径，需 Basic。</p>
+          <p>将容器内 <code>http://127.0.0.1:7900</code> 代理到本服务路径，需控制台登录 Cookie。</p>
           <pre>/vnc/vnc.html?autoconnect=true&amp;resize=scale&amp;path=vnc/websockify</pre>
-          <p class="muted">iframe 与控制台同源，浏览器 Basic 登录一次即可同时访问控制台与 VNC。</p>
+          <p class="muted">iframe 与控制台同源，表单登录一次即可同时访问控制台与 VNC。</p>
         </section>
 
         <section class="doc" id="webhook">
@@ -554,8 +560,11 @@ curl -sS -X POST "$HOST/v1/sessions/$ID/captcha" \
   -H "Content-Type: application/json" \
   -d '{"code":"1234"}'
 
-# 队列（Basic）
-curl -sS -u "admin:admin" "$HOST/v1/queue"
+# 队列（先登录拿 Cookie，或用 Bearer）
+curl -sS -c cookies.txt -X POST "$HOST/v1/auth/login" \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"admin"}'
+curl -sS -b cookies.txt "$HOST/v1/queue"
 
 # 取消
 curl -sS -X DELETE "$HOST/v1/sessions/$ID" -H "Authorization: Bearer $API_TOKEN"</pre>
@@ -608,7 +617,8 @@ docker pull ghcr.io/iiileo/baidu_b2bwork_login:latest</pre>
           <table>
             <tr><th>环境变量</th><th>说明</th></tr>
             <tr><td><code>API_TOKEN</code></td><td>Bearer 调用密钥</td></tr>
-            <tr><td><code>BASIC_AUTH_USER</code> / <code>BASIC_AUTH_PASSWORD</code></td><td>控制台与 /vnc Basic 账号</td></tr>
+            <tr><td><code>BASIC_AUTH_USER</code> / <code>BASIC_AUTH_PASSWORD</code></td><td>控制台登录账号（Cookie）</td></tr>
+            <tr><td><code>SESSION_SECRET</code></td><td>Cookie 签名密钥（可选）</td></tr>
             <tr><td><code>WEBHOOK_SECRET</code></td><td>Webhook 签名密钥</td></tr>
             <tr><td><code>ENABLE_VNC</code></td><td><code>true</code> 开启虚拟显示 + noVNC</td></tr>
             <tr><td><code>PLAYWRIGHT_HEADLESS</code></td><td>开 VNC 时建议 <code>false</code></td></tr>

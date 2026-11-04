@@ -4,10 +4,10 @@ import asyncio
 from typing import Iterable
 
 import httpx
-from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import Response
+from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import RedirectResponse, Response
 
-from src.auth import basic_auth_enabled, require_basic, websocket_authorized
+from src.auth import console_auth_enabled, require_console_session, websocket_authorized
 from src.config import settings
 
 router = APIRouter(tags=["vnc-proxy"])
@@ -58,7 +58,19 @@ def _filter_headers(headers: Iterable[tuple[str, str]]) -> dict[str, str]:
 @router.api_route("/vnc", methods=["GET", "HEAD"])
 @router.api_route("/vnc/{full_path:path}", methods=["GET", "HEAD", "POST", "OPTIONS"])
 async def proxy_vnc_http(request: Request, full_path: str = "") -> Response:
-    require_basic(request)
+    if console_auth_enabled():
+        try:
+            require_console_session(request)
+        except HTTPException:
+            from urllib.parse import quote
+
+            next_url = request.url.path
+            if request.url.query:
+                next_url = f"{next_url}?{request.url.query}"
+            return RedirectResponse(
+                url=f"/login?next={quote(next_url, safe='')}",
+                status_code=302,
+            )
     if full_path in ("", "/"):
         full_path = "vnc.html"
     url = _upstream_http(full_path, request.url.query)
@@ -89,7 +101,7 @@ async def proxy_vnc_http(request: Request, full_path: str = "") -> Response:
 @router.websocket("/vnc/{full_path:path}")
 @router.websocket("/vnc")
 async def proxy_vnc_ws(websocket: WebSocket, full_path: str = "websockify") -> None:
-    if basic_auth_enabled() and not await websocket_authorized(websocket):
+    if console_auth_enabled() and not await websocket_authorized(websocket):
         await websocket.close(code=4401)
         return
 

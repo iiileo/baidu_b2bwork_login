@@ -11,11 +11,11 @@ if [[ -f "$DATA_DIR/vnc_password" ]]; then
   export VNC_PASSWORD
 fi
 
-# 配置了 Basic Auth 时，VNC 本机无密码，对外由 /vnc 代理鉴权
+# 配置了控制台登录账号时，VNC 本机无密码，对外由 /vnc 代理 + Cookie 鉴权
 if [[ -n "${BASIC_AUTH_USER:-}" && -n "${BASIC_AUTH_PASSWORD:-}" ]]; then
   VNC_PASSWORD=""
   export VNC_PASSWORD
-  echo "[entrypoint] Basic Auth enabled → x11vnc without password (gate via /vnc)"
+  echo "[entrypoint] Console login enabled → x11vnc without password (gate via /vnc + cookie)"
 fi
 
 cleanup() {

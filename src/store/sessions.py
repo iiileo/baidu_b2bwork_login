@@ -42,6 +42,7 @@ class SessionRecord:
             "client_ref": self.client_ref,
             "priority": self.priority,
             "silent": self.silent,
+            "cancel_requested": self.cancel_requested,
             "created_at": _iso(self.created_at),
             "updated_at": _iso(self.updated_at),
             "finished_at": _iso(self.finished_at) if self.finished_at else None,
@@ -235,18 +236,27 @@ class SessionStore:
             ).fetchone()
             return self._row_to_record(row) if row else None
 
-    def queue_stats(self) -> dict[str, int]:
+    def queue_stats(self) -> dict[str, Any]:
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT status, COUNT(*) AS c FROM sessions GROUP BY status"
             ).fetchall()
+            current = conn.execute(
+                """
+                SELECT id FROM sessions
+                WHERE status IN ('running','waiting_captcha','waiting_security')
+                ORDER BY COALESCE(claimed_at, 0) DESC, updated_at DESC
+                LIMIT 1
+                """
+            ).fetchone()
         counts = {str(r["status"]): int(r["c"]) for r in rows}
         return {
             "queued": counts.get("queued", 0),
             "running": counts.get("running", 0),
             "waiting": counts.get("waiting_captcha", 0)
             + counts.get("waiting_security", 0),
-            "retrying": 0,  # next_run_at 未来的 queued 算在 queued；可细化
+            "retrying": 0,
+            "current_session_id": str(current["id"]) if current else None,
         }
 
     def claim(self, *, max_attempts: int, stale_seconds: int) -> SessionRecord | None:
@@ -395,12 +405,55 @@ class SessionStore:
                     ),
                 )
             elif rec.status not in TERMINAL:
+                # 标记取消；worker 轮询到后结束。status 保持原值以便 UI 显示「取消中」
                 conn.execute(
                     "UPDATE sessions SET cancel_requested=1, updated_at=? WHERE id=?",
                     (now, session_id),
                 )
             conn.commit()
         return self.get(session_id)
+
+    def finish_cancel_requested(self) -> list[SessionRecord]:
+        """收尾僵尸取消：queued+cancel_requested（claim 会跳过），直接标 cancelled。
+
+        running/waiting 仍由正在执行的 worker 检测 cancel_requested 后结束，
+        避免与进行中的 Playwright 竞态覆写终态。
+        """
+        now = time.time()
+        finished: list[SessionRecord] = []
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id FROM sessions
+                WHERE cancel_requested = 1 AND status = 'queued'
+                """
+            ).fetchall()
+            ids = [str(r["id"]) for r in rows]
+            for sid in ids:
+                conn.execute(
+                    """
+                    UPDATE sessions
+                    SET status='cancelled', password=NULL, error_json=?,
+                        challenge_json=NULL, human_input_json=NULL,
+                        finished_at=?, updated_at=?, claimed_at=NULL
+                    WHERE id=? AND status = 'queued' AND cancel_requested = 1
+                    """,
+                    (
+                        json.dumps(
+                            {"code": "cancelled", "message": "已取消"},
+                            ensure_ascii=False,
+                        ),
+                        now,
+                        now,
+                        sid,
+                    ),
+                )
+            conn.commit()
+        for sid in ids:
+            rec = self.get(sid)
+            if rec and rec.status == "cancelled":
+                finished.append(rec)
+        return finished
 
     def finish(
         self,
@@ -432,7 +485,18 @@ class SessionStore:
             conn.commit()
         return self.get(session_id)
 
-    def release_for_retry(self, session_id: str, delay_seconds: float) -> None:
+    def release_for_retry(self, session_id: str, delay_seconds: float) -> bool:
+        """释放回队列重试。若已请求取消则直接 cancelled，返回 False。"""
+        rec = self.get(session_id)
+        if rec is None:
+            return False
+        if rec.cancel_requested:
+            self.finish(
+                session_id,
+                status="cancelled",
+                error={"code": "cancelled", "message": "已取消"},
+            )
+            return False
         now = time.time()
         with self._connect() as conn:
             conn.execute(
@@ -441,10 +505,12 @@ class SessionStore:
                 SET status='queued', claimed_at=NULL, next_run_at=?,
                     challenge_json=NULL, human_input_json=NULL, updated_at=?
                 WHERE id=? AND status NOT IN ('succeeded','failed','cancelled')
+                  AND cancel_requested = 0
                 """,
                 (now + max(0.0, delay_seconds), now, session_id),
             )
             conn.commit()
+        return True
 
     def is_cancel_requested(self, session_id: str) -> bool:
         rec = self.get(session_id)

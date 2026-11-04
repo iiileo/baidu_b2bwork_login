@@ -1,6 +1,7 @@
 (() => {
   const $ = (id) => document.getElementById(id);
 
+  const FOLLOW_KEY = "bw_follow_current";
   const state = {
     token: localStorage.getItem("bw_api_token") || "",
     pollTimer: null,
@@ -10,17 +11,27 @@
     lastSession: null,
     showRawJson: false,
     lastQrContent: "",
-    basicAuthRequired: false,
+    loginRequired: false,
+    consoleUser: null,
     bootstrap: null,
+    followCurrent: localStorage.getItem(FOLLOW_KEY) !== "0",
+    queue: null,
+    refreshing: false,
   };
 
   $("apiToken").value = state.token;
   if (state.sessionId) $("sessionId").value = state.sessionId;
+  $("followCurrent").checked = state.followCurrent;
 
   function authHeaders() {
     const headers = { "Content-Type": "application/json" };
     if (state.token) headers.Authorization = `Bearer ${state.token}`;
     return headers;
+  }
+
+  function goLogin() {
+    const next = encodeURIComponent(location.pathname + location.search);
+    location.replace(`/login?next=${next}`);
   }
 
   async function api(path, opts = {}) {
@@ -29,6 +40,10 @@
       credentials: "same-origin",
       headers: { ...authHeaders(), ...(opts.headers || {}) },
     });
+    if (res.status === 401 && state.loginRequired) {
+      goLogin();
+      throw new Error("未登录");
+    }
     const text = await res.text();
     let data = null;
     try {
@@ -43,21 +58,25 @@
     return data;
   }
 
-  function applyAuthMode(boot) {
+  function applyAuthMode(boot, me) {
     state.bootstrap = boot;
-    state.basicAuthRequired = !!boot.basic_auth_required;
+    state.loginRequired = !!(boot.login_required ?? boot.basic_auth_required);
+    state.consoleUser = me?.username || null;
     const label = $("authModeLabel");
     const tokenField = $("tokenField");
     const btnSave = $("btnSaveToken");
-    if (state.basicAuthRequired) {
-      label.textContent = "Basic 已启用（控制台 / VNC 共用）";
+    const btnLogout = $("btnLogout");
+    if (state.loginRequired) {
+      label.textContent = state.consoleUser ? `已登录 · ${state.consoleUser}` : "已登录";
       tokenField.classList.add("hidden");
       btnSave.classList.add("hidden");
+      btnLogout.classList.remove("hidden");
       $("vncPasswordBlock").classList.add("hidden");
     } else {
-      label.textContent = "Bearer Token 模式";
+      label.textContent = "Bearer Token";
       tokenField.classList.remove("hidden");
       btnSave.classList.remove("hidden");
+      btnLogout.classList.add("hidden");
       $("vncPasswordBlock").classList.remove("hidden");
     }
   }
@@ -106,7 +125,9 @@
     $("vncPageUrl").value = data.vnc_page_url || fallback;
     $("defaultWebhook").value = data.default_webhook_url || "";
     $("webhookUrl").value = data.default_webhook_url || $("webhookUrl").value;
-    $("priority").value = data.default_priority || 1;
+    const pri = data.default_priority || 1;
+    $("defaultPriority").value = pri;
+    $("testPriority").value = pri;
     if ($("vncPwdStatus")) {
       $("vncPwdStatus").textContent = data.vnc_password_set
         ? "服务端已保存 VNC 密码（不会回显明文）。"
@@ -115,7 +136,7 @@
     let embedPassword = "";
     const pageUrl = data.vnc_page_url || fallback;
     const viaProxy = pageUrl.startsWith("/vnc") || pageUrl.includes("/vnc/");
-    if (!viaProxy && !state.basicAuthRequired) {
+    if (!viaProxy && !state.loginRequired) {
       try {
         const p = await api("/v1/console/vnc-embed-password");
         embedPassword = p.password || "";
@@ -182,7 +203,11 @@
     const el = $("statusBanner");
     el.classList.remove("idle", "ok", "bad", "wait", "run");
     const st = data.status || "";
-    if (st === "succeeded") {
+    const cancelling = !!data.cancel_requested && !["succeeded", "failed", "cancelled"].includes(st);
+    if (cancelling) {
+      el.classList.add("wait");
+      el.textContent = "取消中…（等待 worker 退出当前步骤）";
+    } else if (st === "succeeded") {
       el.classList.add("ok");
       const n = data.result?.cookies?.length ?? 0;
       el.textContent = `登录成功 · cookies=${n}`;
@@ -201,26 +226,54 @@
       el.classList.add("run");
       el.textContent = `状态：${st || "未知"}`;
     }
+    const btn = $("btnCancel");
+    if (btn) {
+      const terminal = ["succeeded", "failed", "cancelled"].includes(st);
+      btn.disabled = terminal || cancelling;
+      btn.textContent = cancelling ? "取消中…" : "取消";
+    }
   }
 
-  async function refreshSession() {
-    const id = $("sessionId").value.trim();
-    if (!id) return;
-    state.sessionId = id;
-    localStorage.setItem("bw_session_id", id);
-    const data = await api(`/v1/sessions/${id}`);
-    state.lastSession = data;
-    renderSessionJson(data);
-    renderStatusBanner(data);
-    renderChallenge(data);
-    const key = `${data.id}:${data.status}:${data.error?.code || ""}`;
-    if (key !== state.lastLoggedStatus) {
-      state.lastLoggedStatus = key;
-      appendLog(
-        `会话 ${data.id} => ${data.status}` +
-          (data.error ? ` code=${data.error.code} message=${data.error.message}` : "") +
-          (data.result?.cookies ? ` cookies=${data.result.cookies.length}` : "")
-      );
+  function renderQueue(q) {
+    state.queue = q;
+    $("qQueued").textContent = String(q.queued ?? 0);
+    $("qRunning").textContent = String(q.running ?? 0);
+    $("qWaiting").textContent = String(q.waiting ?? 0);
+  }
+
+  function setSessionId(id, { persist = true } = {}) {
+    const next = (id || "").trim();
+    if (!next) return;
+    $("sessionId").value = next;
+    state.sessionId = next;
+    if (persist) localStorage.setItem("bw_session_id", next);
+  }
+
+  async function refreshSession(idOverride) {
+    const id = (idOverride || $("sessionId").value).trim();
+    if (!id) return null;
+    if (state.refreshing) return state.lastSession;
+    state.refreshing = true;
+    try {
+      setSessionId(id);
+      const data = await api(`/v1/sessions/${id}`);
+      state.lastSession = data;
+      renderSessionJson(data);
+      renderStatusBanner(data);
+      renderChallenge(data);
+      const key = `${data.id}:${data.status}:${data.cancel_requested ? 1 : 0}:${data.error?.code || ""}`;
+      if (key !== state.lastLoggedStatus) {
+        state.lastLoggedStatus = key;
+        appendLog(
+          `会话 ${data.id} => ${data.status}` +
+            (data.cancel_requested && data.status !== "cancelled" ? " (取消中)" : "") +
+            (data.error ? ` code=${data.error.code} message=${data.error.message}` : "") +
+            (data.result?.cookies ? ` cookies=${data.result.cookies.length}` : "")
+        );
+      }
+      return data;
+    } finally {
+      state.refreshing = false;
     }
   }
 
@@ -244,7 +297,7 @@
     }
 
     box.classList.remove("is-empty");
-    meta.textContent = `status=${data.status} type=${ch.type || ""} expires=${ch.expires_at || ""}`;
+    meta.textContent = `${ch.type || ""} · ${ch.expires_at || ""}`;
 
     if (data.status === "waiting_captcha") {
       form.classList.remove("hidden");
@@ -257,33 +310,47 @@
     if (data.status === "waiting_security") {
       if (ch.qr_content && window.QRCode) {
         canvas.classList.remove("hidden");
-        const size = Math.max(
-          200,
-          Math.min(260, Math.floor((box.clientWidth || 260) - 28))
-        );
+        const size = 168;
         if (ch.qr_content !== state.lastQrContent || canvas.width !== size) {
           state.lastQrContent = ch.qr_content;
           QRCode.toCanvas(
             canvas,
             ch.qr_content,
-            { width: size, margin: 2, errorCorrectionLevel: "M" },
+            { width: size, margin: 1, errorCorrectionLevel: "M" },
             () => {}
           );
         }
       } else {
-        meta.textContent += " · 缺少 qr_content，无法展示";
+        meta.textContent += " · 缺少 qr_content";
       }
     } else {
       state.lastQrContent = "";
     }
   }
 
+  async function pollTick() {
+    try {
+      const q = await api("/v1/queue");
+      renderQueue(q);
+      const currentId = q.current_session_id || "";
+      if (state.followCurrent && currentId && currentId !== $("sessionId").value.trim()) {
+        setSessionId(currentId);
+        appendLog(`跟随当前处理会话 ${currentId}`);
+      }
+    } catch (e) {
+      /* queue poll soft-fail */
+    }
+
+    const id = $("sessionId").value.trim();
+    if (id) {
+      await refreshSession(id).catch((e) => appendLog(`poll error: ${e.message}`));
+    }
+  }
+
   function startPoll() {
     stopPoll();
     state.pollTimer = setInterval(() => {
-      if ($("sessionId").value.trim()) {
-        refreshSession().catch((e) => appendLog(`poll error: ${e.message}`));
-      }
+      pollTick();
     }, 2000);
   }
 
@@ -297,10 +364,12 @@
     if (ws) {
       try { ws.close(); } catch { /* */ }
     }
-    if (!state.basicAuthRequired && !state.token) return;
+    if (!state.loginRequired && !state.token) return;
     const proto = location.protocol === "https:" ? "wss" : "ws";
     let url = `${proto}://${location.host}/v1/logs`;
-    if (state.token) url += `?token=${encodeURIComponent(state.token)}`;
+    if (!state.loginRequired && state.token) {
+      url += `?token=${encodeURIComponent(state.token)}`;
+    }
     ws = new WebSocket(url);
     ws.onmessage = (ev) => appendLog(ev.data);
     ws.onclose = () => appendLog("日志 WS 已断开");
@@ -315,13 +384,46 @@
     }
   }
 
+  $("followCurrent").onchange = () => {
+    state.followCurrent = $("followCurrent").checked;
+    localStorage.setItem(FOLLOW_KEY, state.followCurrent ? "1" : "0");
+    if (state.followCurrent) pollTick();
+  };
+
+  $("sessionId").addEventListener("change", () => {
+    const id = $("sessionId").value.trim();
+    if (id) {
+      state.followCurrent = false;
+      $("followCurrent").checked = false;
+      localStorage.setItem(FOLLOW_KEY, "0");
+      setSessionId(id);
+      refreshSession(id).catch((e) => appendLog(e.message));
+    }
+  });
+
   $("btnSaveToken").onclick = () => {
     state.token = $("apiToken").value.trim();
     localStorage.setItem("bw_api_token", state.token);
     connectLogs();
     loadSettings().catch((e) => appendLog(e.message));
+    startPoll();
     appendLog("Token 已保存到本机 localStorage");
   };
+
+  $("btnLogout").onclick = async () => {
+    try {
+      await api("/v1/auth/logout", { method: "POST", body: "{}" });
+    } catch {
+      /* still redirect */
+    }
+    goLogin();
+  };
+
+  $("btnTestLogin").onclick = () => {
+    $("createMsg").textContent = "";
+    $("testLoginDialog").showModal();
+  };
+  $("btnCloseTest").onclick = () => $("testLoginDialog").close();
 
   $("btnSettings").onclick = () => $("settingsDialog").showModal();
 
@@ -330,7 +432,7 @@
       const body = {
         vnc_page_url: $("vncPageUrl").value.trim(),
         default_webhook_url: $("defaultWebhook").value.trim(),
-        default_priority: Number($("priority").value || 1),
+        default_priority: Number($("defaultPriority").value || 1),
         clear_vnc_password: !!$("clearVncPassword")?.checked,
       };
       const pwd = $("vncPassword")?.value;
@@ -368,10 +470,12 @@
     try {
       const data = await api("/v1/sessions", { method: "POST", body: JSON.stringify(body) });
       $("createMsg").textContent = `已创建 ${data.id} · queue_position=${data.queue_position}`;
-      $("sessionId").value = data.id;
-      localStorage.setItem("bw_session_id", data.id);
-      await refreshSession();
+      setSessionId(data.id);
+      // 新提交后短暂跟随该会话；若开启跟随且已有进行中任务，下一轮会切回 current
+      await refreshSession(data.id);
       startPoll();
+      appendLog(`已创建测试会话 ${data.id}`);
+      $("testLoginDialog").close();
     } catch (e) {
       $("createMsg").textContent = e.message;
     }
@@ -400,11 +504,22 @@
   $("btnCancel").onclick = async () => {
     const id = $("sessionId").value.trim();
     if (!id) return;
+    const btn = $("btnCancel");
+    btn.disabled = true;
+    btn.textContent = "取消中…";
     try {
-      await api(`/v1/sessions/${id}`, { method: "DELETE" });
+      const data = await api(`/v1/sessions/${id}`, { method: "DELETE" });
+      appendLog(
+        data.status === "cancelled"
+          ? `会话 ${id} 已取消`
+          : `会话 ${id} 已请求取消，等待 worker 退出`
+      );
       await refreshSession();
+      startPoll();
     } catch (e) {
       appendLog(e.message);
+      btn.disabled = false;
+      btn.textContent = "取消";
     }
   };
 
@@ -433,20 +548,25 @@
       const boot = await fetch("/v1/console/bootstrap", { credentials: "same-origin" }).then((r) =>
         r.json()
       );
-      applyAuthMode(boot);
-      if (!state.basicAuthRequired && !state.token) {
-        appendLog("未启用 Basic：请填写 API Token 并保存");
+      const me = await fetch("/v1/auth/me", { credentials: "same-origin" })
+        .then((r) => r.json())
+        .catch(() => ({ authenticated: false }));
+      if ((boot.login_required ?? boot.basic_auth_required) && !me.authenticated) {
+        goLogin();
         return;
       }
-      if (state.basicAuthRequired) {
-        appendLog("已通过浏览器 Basic 进入；VNC 走 /vnc 同源代理，无需 VNC 密码");
+      applyAuthMode(boot, me);
+      if (!state.loginRequired && !state.token) {
+        appendLog("未启用控制台登录：请填写 API Token 并保存");
+        return;
+      }
+      if (state.loginRequired) {
+        appendLog(`已登录控制台${state.consoleUser ? " · " + state.consoleUser : ""}；VNC 走 /vnc 同源代理`);
       }
       connectLogs();
       await loadSettings();
-      if (state.sessionId) {
-        await refreshSession().catch(() => {});
-        startPoll();
-      }
+      startPoll();
+      await pollTick();
     } catch (e) {
       appendLog(`初始化失败: ${e.message}`);
     }

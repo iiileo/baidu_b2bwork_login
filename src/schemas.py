@@ -44,6 +44,7 @@ class QueueStatsResponse(BaseModel):
     running: int
     waiting: int
     retrying: int
+    current_session_id: str | None = None
 
 
 class SessionResponse(BaseModel):
@@ -53,6 +54,7 @@ class SessionResponse(BaseModel):
     client_ref: str | None = None
     priority: int = 1
     silent: bool = False
+    cancel_requested: bool = False
     created_at: str
     updated_at: str
     finished_at: str | None = None

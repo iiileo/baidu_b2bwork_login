@@ -177,6 +177,18 @@ def _fail_or_retry(
     browser: bool,
     exc: Exception,
 ) -> None:
+    # 取消优先：异常路径也不得把已取消会话重新入队（否则永远 claim 不到）
+    if store.is_cancel_requested(claimed.id):
+        finished = store.finish(
+            claimed.id,
+            status="cancelled",
+            error={"code": "cancelled", "message": "已取消"},
+        )
+        if finished:
+            _emit_finished(finished, "cancelled")
+        _purge_challenge_file(claimed.id)
+        log_bus.emit(f"异常路径收尾取消 id={claimed.id}")
+        return
     if claimed.attempts >= settings.login_max_attempts:
         code = "browser_error" if browser else "login_error"
         finished = store.finish(
@@ -190,7 +202,14 @@ def _fail_or_retry(
         log_bus.emit(f"重试用尽 id={claimed.id}")
         return
     delay = _retry_delay(claimed.attempts)
-    store.release_for_retry(claimed.id, delay_seconds=delay)
+    released = store.release_for_retry(claimed.id, delay_seconds=delay)
+    if not released:
+        finished = store.get(claimed.id)
+        if finished and finished.status == "cancelled":
+            _emit_finished(finished, "cancelled")
+            _purge_challenge_file(claimed.id)
+        log_bus.emit(f"释放时发现已取消 id={claimed.id}")
+        return
     log_bus.emit(f"会话释放重试 id={claimed.id} delay={delay}s")
 
 
@@ -214,6 +233,10 @@ def main() -> None:
 
     while not _stopping:
         try:
+            for zombie in store.finish_cancel_requested():
+                _emit_finished(zombie, "cancelled")
+                _purge_challenge_file(zombie.id)
+                log_bus.emit(f"收尾已取消的排队会话 id={zombie.id}")
             got = process_once(store)
         except Exception as exc:  # noqa: BLE001
             log_bus.emit(f"worker 循环异常: {exc}")

@@ -16,20 +16,20 @@ uv run python login_worker.py
 uv run python main.py
 ```
 
-- 控制台：<http://127.0.0.1:8056/ui/>
+- 控制台：<http://127.0.0.1:8056/ui/>（未登录会跳到 `/login`）
 - 接口文档：<http://127.0.0.1:8056/docs.html>
-- 默认 Basic：`admin` / `admin`（`.env` 的 `BASIC_AUTH_*`）
+- 默认控制台账号：`admin` / `admin`（`.env` 的 `BASIC_AUTH_*`）
 - 程序调用仍可用 `Authorization: Bearer <API_TOKEN>`
 
 ## 鉴权说明
 
 | 场景 | 方式 |
 |------|------|
-| 控制台 `/ui`、VNC 代理 `/vnc` | HTTP Basic（`BASIC_AUTH_USER` / `BASIC_AUTH_PASSWORD`） |
-| `/v1/*` API | Bearer **或** Basic |
-| `/health`、`/docs.html` | 公开 |
+| 控制台 `/ui`、VNC 代理 `/vnc` | 表单登录 + Cookie（`BASIC_AUTH_USER` / `BASIC_AUTH_PASSWORD`） |
+| `/v1/*` API | Bearer **或** 已登录 Cookie |
+| `/login`、`/health`、`/docs.html` | 公开 |
 
-启用 Basic 后，VNC 经同源 `/vnc` 代理访问，x11vnc 无需密码；不要对外映射 7900。
+启用控制台登录后，VNC 经同源 `/vnc` 代理访问，x11vnc 无需密码；不要对外映射 7900。
 
 ## 控制台能力
 

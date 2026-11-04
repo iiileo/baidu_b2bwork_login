@@ -32,9 +32,20 @@ class BrowserSession:
                 launcher = getattr(self._pw, settings.playwright_browser)
                 self.browser = launcher.launch(
                     headless=headless,
-                    args=["--no-sandbox", "--disable-dev-shm-usage"],
+                    args=[
+                        "--no-sandbox",
+                        "--disable-dev-shm-usage",
+                        "--disable-gpu",
+                        "--disable-extensions",
+                        "--disable-background-networking",
+                        "--disable-default-apps",
+                        "--no-first-run",
+                    ],
                 )
-                self.context = self.browser.new_context(locale="zh-CN")
+                self.context = self.browser.new_context(
+                    locale="zh-CN",
+                    viewport={"width": 1280, "height": 720},
+                )
                 self.context.set_default_timeout(settings.playwright_default_timeout_ms)
                 self.context.set_default_navigation_timeout(
                     settings.playwright_navigation_timeout_ms

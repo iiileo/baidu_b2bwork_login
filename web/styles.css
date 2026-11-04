@@ -63,7 +63,7 @@ body {
 .top-actions {
   display: flex;
   gap: 8px;
-  align-items: flex-end; /* 与带 label 的 input 底边对齐 */
+  align-items: flex-end;
   flex-wrap: wrap;
 }
 .token-field {
@@ -78,7 +78,7 @@ body {
   display: block;
   min-height: 14px;
 }
-.token-field input { width: min(240px, 36vw); }
+.token-field input { width: min(200px, 28vw); }
 .top-actions input,
 .top-actions button {
   height: 32px;
@@ -86,22 +86,56 @@ body {
   line-height: 30px;
 }
 .top-actions .dot {
-  margin: 0 0 11px; /* 相对 32px 控件垂直居中 */
+  margin: 0 0 11px;
+}
+.top-actions > .primary {
+  margin-bottom: 0;
+  align-self: flex-end;
 }
 
-/* 左：操作/会话/二维码固定舒适宽度；右：VNC 吃剩余空间，宽屏仍是主画面 */
+.queue-stats {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+  margin-bottom: 0;
+  align-self: flex-end;
+  height: 32px;
+}
+.q-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #f7f9fc;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.q-item em {
+  font-style: normal;
+  font-size: 11px;
+}
+.q-item b {
+  font-family: var(--mono);
+  font-weight: 600;
+  color: var(--text);
+  font-size: 13px;
+}
+
 .grid {
   flex: 1 1 auto;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(420px, 480px) minmax(0, 1fr);
+  grid-template-columns: minmax(400px, 460px) minmax(0, 1fr);
   gap: 14px;
   padding: 14px 20px;
   overflow: hidden;
 }
 @media (max-width: 1100px) {
   .grid {
-    grid-template-columns: minmax(380px, 42%) minmax(0, 1fr);
+    grid-template-columns: minmax(360px, 40%) minmax(0, 1fr);
   }
 }
 @media (max-width: 980px) {
@@ -129,19 +163,41 @@ body {
   font-weight: 600;
   color: var(--accent-2);
 }
-.panel h3 { margin: 0 0 8px; font-size: 14px; color: var(--text); }
+.panel h3 { margin: 0; font-size: 13px; color: var(--text); font-weight: 600; }
 
+/* 左栏：工具条固定 + 挑战限高 + JSON 占剩余，互不挤压 */
 .side-panel {
   display: flex;
   flex-direction: column;
+  gap: 10px;
 }
-.side-scroll {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
+
+.session-toolbar {
+  flex: 0 0 auto;
+}
+.session-toolbar-head {
   display: flex;
-  flex-direction: column;
-  gap: 0;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.session-toolbar-head h2 { margin: 0; }
+.follow-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  user-select: none;
+  cursor: pointer;
+}
+.follow-toggle input {
+  width: auto;
+  height: auto;
+  margin: 0;
+  padding: 0;
+  line-height: normal;
 }
 
 .form { display: grid; gap: 10px; }
@@ -163,19 +219,23 @@ input:focus {
 }
 button { cursor: pointer; background: #f7f9fc; }
 button:hover { border-color: #b8c7de; }
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
 button.primary {
   background: var(--accent);
   border-color: var(--accent);
   color: #fff;
   font-weight: 600;
 }
-button.primary:hover { background: var(--accent-2); border-color: var(--accent-2); }
+button.primary:hover:not(:disabled) { background: var(--accent-2); border-color: var(--accent-2); }
 button.ghost { background: #fff; }
 button.danger { color: var(--danger); border-color: #efc0c0; background: #fff; }
-button.danger:hover { background: #fff5f5; }
+button.danger:hover:not(:disabled) { background: #fff5f5; }
 .row { display: flex; gap: 8px; margin-bottom: 8px; }
 .row.compact { margin-bottom: 0; align-items: center; }
-.row input { flex: 1; }
+.row input { flex: 1; min-width: 0; }
 .row-form { grid-template-columns: 1fr auto; align-items: end; }
 
 .code {
@@ -192,14 +252,16 @@ button.danger:hover { background: #fff5f5; }
   word-break: break-word;
   color: #243956;
 }
+
 .json-block {
-  margin-top: 8px;
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  min-height: 160px;
-  flex: 1 1 auto;
+  overflow: hidden;
 }
 .json-head {
+  flex: 0 0 auto;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -209,9 +271,9 @@ button.danger:hover { background: #fff5f5; }
 .json-head h2 { margin: 0; }
 .json-view {
   flex: 1 1 auto;
-  min-height: 140px;
-  max-height: none;
+  min-height: 120px;
   height: auto;
+  overflow: auto;
 }
 .logs {
   flex: 0 0 auto;
@@ -228,12 +290,12 @@ button.danger:hover { background: #fff5f5; }
 
 .msg {
   min-height: 1.2em;
-  margin: 8px 0 14px;
+  margin: 0;
   font-size: 13px;
   color: var(--accent-2);
 }
 .status-banner {
-  margin: 0 0 10px;
+  margin: 0;
   padding: 8px 10px;
   min-height: 38px;
   border-radius: var(--radius);
@@ -253,26 +315,56 @@ button.danger:hover { background: #fff5f5; }
 .hint { margin: 0; font-size: 12px; color: var(--muted); }
 .hidden { display: none !important; }
 
+/* 挑战区：固定上限，内部滚动，不挤压 JSON */
 .challenge {
-  margin: 0 0 10px;
-  padding: 12px;
+  flex: 0 0 auto;
+  max-height: 240px;
+  padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: #f7f9fc;
-  min-height: 72px;
-  overflow: visible;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
 }
-.challenge.is-empty h3,
-.challenge.is-empty #challengeMeta { opacity: 0.7; }
+.challenge.is-empty {
+  max-height: 64px;
+}
+.challenge.is-empty .challenge-body {
+  display: none;
+}
+.challenge-head {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 0;
+}
+.challenge:not(.is-empty) .challenge-head {
+  margin-bottom: 8px;
+}
+.challenge-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
 .challenge-media {
-  margin-top: 8px;
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
   max-width: 100%;
-  overflow: visible;
 }
 .challenge-img {
   display: block;
-  max-width: 100%;
-  width: min(240px, 100%);
+  max-width: 180px;
+  max-height: 120px;
+  width: auto;
   height: auto;
   object-fit: contain;
   border-radius: var(--radius);
@@ -281,9 +373,10 @@ button.danger:hover { background: #fff5f5; }
 }
 #qrCanvas {
   display: block;
-  max-width: 100%;
-  width: auto;
-  height: auto;
+  max-width: 180px;
+  max-height: 180px;
+  width: auto !important;
+  height: auto !important;
   border-radius: var(--radius);
   background: #fff;
   border: 1px solid var(--line);
@@ -335,12 +428,12 @@ dialog {
   background: var(--panel);
   color: var(--text);
   padding: 0;
-  width: min(520px, 92vw);
+  width: min(480px, 92vw);
 }
 dialog::backdrop { background: rgba(26, 43, 69, 0.35); }
 .dialog-form { padding: 18px; }
 .dialog-form h2 { margin: 0 0 12px; color: var(--accent-2); font-size: 15px; }
-.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
 .check { display: flex !important; flex-direction: row !important; align-items: center; gap: 8px; }
 .check input {
   width: auto;
@@ -361,4 +454,10 @@ dialog::backdrop { background: rgba(26, 43, 69, 0.35); }
   font-size: 13px;
 }
 .ghost-link:hover { border-color: #b8c7de; }
-#authModeLabel { margin-bottom: 11px; }
+#authModeLabel {
+  margin-bottom: 11px;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

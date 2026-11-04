@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>登录 · B2BWork Console</title>
+  <link rel="preconnect" href="https://fonts.loli.net" />
+  <link href="https://fonts.loli.net/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #eaf1fb;
+      --panel: #fff;
+      --line: #d5deeb;
+      --text: #1a2b45;
+      --muted: #6b7c96;
+      --accent: #2f6fed;
+      --accent-2: #1a56db;
+      --danger: #d14343;
+      --sans: "IBM Plex Sans", "PingFang SC", "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100dvh;
+      font-family: var(--sans);
+      color: var(--text);
+      background:
+        radial-gradient(900px 420px at 10% -10%, #d7e6ff 0%, transparent 60%),
+        radial-gradient(700px 380px at 100% 0%, #e4eefc 0%, transparent 55%),
+        linear-gradient(180deg, var(--bg), #f3f6fb 60%);
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+    .card {
+      width: min(400px, 100%);
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 2px;
+      padding: 28px 26px 22px;
+      box-shadow: 0 18px 40px rgba(26, 43, 69, 0.06);
+    }
+    .brand {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      margin-bottom: 22px;
+    }
+    .mark {
+      width: 40px; height: 40px;
+      display: grid; place-items: center;
+      background: var(--accent); color: #fff;
+      font-weight: 700; font-size: 13px;
+    }
+    .brand strong { font-size: 17px; display: block; }
+    .brand span { color: var(--muted); font-size: 12px; }
+    h1 {
+      margin: 0 0 6px;
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--accent-2);
+    }
+    .sub { margin: 0 0 18px; color: var(--muted); font-size: 13px; }
+    form { display: grid; gap: 12px; }
+    label { display: grid; gap: 5px; font-size: 12px; color: var(--muted); }
+    input {
+      height: 38px; padding: 0 11px;
+      border: 1px solid var(--line); border-radius: 2px;
+      font: inherit; color: var(--text); background: #fff;
+    }
+    input:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px #e8f0fe;
+    }
+    button {
+      height: 40px; margin-top: 4px;
+      border: 0; border-radius: 2px;
+      background: var(--accent); color: #fff;
+      font: inherit; font-weight: 600; cursor: pointer;
+    }
+    button:hover { background: var(--accent-2); }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .msg {
+      min-height: 1.2em;
+      margin: 0;
+      font-size: 13px;
+      color: var(--danger);
+    }
+    .hint {
+      margin: 14px 0 0;
+      font-size: 12px;
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="brand">
+      <span class="mark">BW</span>
+      <div>
+        <strong>B2BWork Login</strong>
+        <span>控制台登录</span>
+      </div>
+    </div>
+    <h1>登录</h1>
+    <p class="sub">使用控制台账号进入 Web Console 与 VNC。</p>
+    <form id="loginForm">
+      <label>用户名<input name="username" id="username" required autocomplete="username" /></label>
+      <label>密码<input name="password" id="password" type="password" required autocomplete="current-password" /></label>
+      <p id="msg" class="msg"></p>
+      <button type="submit" id="btnLogin">进入控制台</button>
+    </form>
+    <p class="hint">默认账号见环境变量 BASIC_AUTH_USER / BASIC_AUTH_PASSWORD。</p>
+  </div>
+  <script>
+    (() => {
+      const params = new URLSearchParams(location.search);
+      const next = params.get("next") || "/ui/";
+      const form = document.getElementById("loginForm");
+      const msg = document.getElementById("msg");
+      const btn = document.getElementById("btnLogin");
+
+      // 已登录则直接跳转
+      fetch("/v1/auth/me", { credentials: "same-origin" })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (data && data.authenticated) location.replace(next);
+        })
+        .catch(() => {});
+
+      form.addEventListener("submit", async (ev) => {
+        ev.preventDefault();
+        msg.textContent = "";
+        btn.disabled = true;
+        const body = {
+          username: document.getElementById("username").value.trim(),
+          password: document.getElementById("password").value,
+        };
+        try {
+          const res = await fetch("/v1/auth/login", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            throw new Error(data.detail || data.message || "登录失败");
+          }
+          location.replace(next);
+        } catch (e) {
+          msg.textContent = e.message || "登录失败";
+          btn.disabled = false;
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

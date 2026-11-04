@@ -15,9 +15,11 @@ class Settings(BaseSettings):
     # Auth
     api_token: str = "dev-token-change-me"
     webhook_secret: str = "dev-webhook-secret-change-me"
-    # Console / VNC 共用 HTTP Basic（都配置后启用）
+    # 控制台表单登录账号（都配置后启用 Cookie 会话）
     basic_auth_user: str = "admin"
     basic_auth_password: str = "admin"
+    # Cookie 签名密钥（留空则回退 webhook_secret / api_token）
+    session_secret: str = ""
 
     # Storage
     data_dir: str = "./data"
@@ -51,7 +53,7 @@ class Settings(BaseSettings):
     enable_vnc: bool = False
     display: str = ":99"
     vnc_password: str = ""
-    # 本地 websockify/noVNC 上游（仅容器内访问；对外走 /vnc 代理 + Basic）
+    # 本地 websockify/noVNC 上游（仅容器内访问；对外走 /vnc 代理 + 登录 Cookie）
     vnc_upstream: str = "http://127.0.0.1:7900"
     # 浏览器访问 noVNC 的默认地址（同源代理，GUI 可覆盖）
     vnc_page_url: str = "/vnc/vnc.html?autoconnect=true&resize=scale&path=vnc/websockify"

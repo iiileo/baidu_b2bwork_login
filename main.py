@@ -5,6 +5,7 @@ import base64
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator
+from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
@@ -13,9 +14,12 @@ from pydantic import BaseModel, Field
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from src.auth import (
-    basic_auth_enabled,
+    clear_session_cookie,
+    console_auth_enabled,
     require_api_auth,
-    require_basic,
+    require_console_session,
+    set_session_cookie,
+    verify_console_credentials,
     websocket_authorized,
 )
 from src.config import ensure_data_dir, settings
@@ -42,20 +46,27 @@ class ConsoleSettingsUpdate(BaseModel):
     default_priority: int | None = Field(default=None, ge=1)
 
 
-class BasicGateMiddleware(BaseHTTPMiddleware):
-    """保护 /ui 静态资源：启用 Basic 时未登录则弹浏览器账号框。"""
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class ConsoleGateMiddleware(BaseHTTPMiddleware):
+    """保护 /ui：未登录则跳转 /login（登录页本身不在 /ui 下）。"""
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
         if path == "/ui" or path.startswith("/ui/"):
-            if basic_auth_enabled():
+            if console_auth_enabled():
                 try:
-                    require_basic(request)
-                except HTTPException as exc:
-                    return Response(
-                        content=exc.detail,
-                        status_code=exc.status_code,
-                        headers=exc.headers,
+                    require_console_session(request)
+                except HTTPException:
+                    next_url = path
+                    if request.url.query:
+                        next_url = f"{path}?{request.url.query}"
+                    return RedirectResponse(
+                        url=f"/login?next={quote(next_url, safe='')}",
+                        status_code=302,
                     )
         return await call_next(request)
 
@@ -66,19 +77,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     ensure_data_dir()
     app.state.store = SessionStore(settings.queue_db_path)
     log_bus.bind_loop(asyncio.get_running_loop())
-    mode = "basic+bearer" if basic_auth_enabled() else "bearer-only"
+    mode = "cookie+bearer" if console_auth_enabled() else "bearer-only"
     log_bus.emit(f"API 启动 db={settings.queue_db_path} auth={mode}")
     yield
 
 
 app = FastAPI(
     title="B2BWork Login",
-    version="0.3.0",
+    version="0.4.0",
     lifespan=lifespan,
     docs_url=None,
     redoc_url=None,
 )
-app.add_middleware(BasicGateMiddleware)
+app.add_middleware(ConsoleGateMiddleware)
 app.include_router(vnc_router)
 
 
@@ -96,7 +107,6 @@ def _public_challenge(challenge: dict | None) -> dict | None:
         "expires_at": challenge.get("expires_at"),
         "image_base64": None,
     }
-    # 安全扫码只返回 qr_content；图片验证码才带 image_base64
     if ctype == "captcha_image":
         out["image_base64"] = challenge.get("image_base64")
         if not out["image_base64"]:
@@ -118,6 +128,14 @@ def root() -> RedirectResponse:
     return RedirectResponse(url="/ui/")
 
 
+@app.get("/login")
+def login_page() -> FileResponse:
+    path = WEB_DIR / "login.html"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="login.html missing")
+    return FileResponse(path)
+
+
 @app.get("/docs.html")
 def api_docs_page() -> FileResponse:
     path = WEB_DIR / "docs.html"
@@ -126,12 +144,56 @@ def api_docs_page() -> FileResponse:
     return FileResponse(path)
 
 
+@app.get("/v1/auth/me")
+def auth_me(request: Request) -> dict[str, Any]:
+    if not console_auth_enabled():
+        return {
+            "authenticated": True,
+            "login_required": False,
+            "username": None,
+        }
+    try:
+        payload = require_console_session(request)
+    except HTTPException:
+        return {
+            "authenticated": False,
+            "login_required": True,
+            "username": None,
+        }
+    return {
+        "authenticated": True,
+        "login_required": True,
+        "username": payload.get("u"),
+    }
+
+
+@app.post("/v1/auth/login")
+def auth_login(body: LoginRequest) -> JSONResponse:
+    if not console_auth_enabled():
+        raise HTTPException(status_code=400, detail="控制台登录未启用")
+    username = body.username.strip()
+    if not verify_console_credentials(username, body.password):
+        raise HTTPException(status_code=401, detail="用户名或密码错误")
+    resp = JSONResponse({"ok": True, "username": username})
+    set_session_cookie(resp, username)
+    log_bus.emit(f"控制台登录成功 user={username}")
+    return resp
+
+
+@app.post("/v1/auth/logout")
+def auth_logout() -> JSONResponse:
+    resp = JSONResponse({"ok": True})
+    clear_session_cookie(resp)
+    return resp
+
+
 @app.get("/v1/console/bootstrap")
 def console_bootstrap() -> dict[str, Any]:
     return {
-        "basic_auth_required": basic_auth_enabled(),
+        "login_required": console_auth_enabled(),
+        "basic_auth_required": False,
         "default_vnc_page_url": settings.vnc_page_url,
-        "api_token_optional": basic_auth_enabled(),
+        "api_token_optional": console_auth_enabled(),
     }
 
 
@@ -155,7 +217,7 @@ def put_console_settings(body: ConsoleSettingsUpdate) -> dict[str, Any]:
 
 @app.get("/v1/console/vnc-embed-password", dependencies=[Depends(require_api_auth)])
 def vnc_embed_password() -> dict[str, str]:
-    """兼容旧逻辑；推荐走 /vnc 同源代理 + Basic，无需 VNC 密码。"""
+    """兼容旧逻辑；推荐走 /vnc 同源代理 + 控制台登录 Cookie。"""
     return {"password": read_vnc_password()}
 
 
