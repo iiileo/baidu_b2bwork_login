@@ -1,14 +1,13 @@
-# 国内默认用 azure.cn；海外/ACR 可传：
-#   --build-arg USE_CHINA_MIRROR=0
-#   --build-arg PLAYWRIGHT_IMAGE=mcr.microsoft.com/playwright/python:v1.64.1-noble
+# 国内（默认）:
+#   docker build .
+# 海外:
+#   docker build --build-arg USE_CHINA_MIRROR=0 \
+#     --build-arg PLAYWRIGHT_IMAGE=mcr.microsoft.com/playwright/python:v1.64.1-noble .
 ARG PLAYWRIGHT_IMAGE=mcr.azure.cn/playwright/python:v1.64.1-noble
 FROM ${PLAYWRIGHT_IMAGE}
 
-# USE_CHINA_MIRROR=1 → apt/pip 用清华；=0 → apt 原源 + pip 官方 PyPI
-# 也可显式覆盖：--build-arg PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+# 1=国内镜像（apt 清华 + pip 清华）；0=海外（apt 官方 + pip pypi.org）
 ARG USE_CHINA_MIRROR=1
-ARG PIP_INDEX_URL=
-ARG PIP_TRUSTED_HOST=
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -41,6 +40,11 @@ RUN set -eux; \
         -e 's|http://azure.ports.ubuntu.com/ubuntu-ports|https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports|g' \
         -e 's|https://azure.ports.ubuntu.com/ubuntu-ports|https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports|g' \
         {} +; \
+      PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple/"; \
+      PIP_TRUSTED_HOST="pypi.tuna.tsinghua.edu.cn"; \
+    else \
+      PIP_INDEX_URL="https://pypi.org/simple/"; \
+      PIP_TRUSTED_HOST="pypi.org"; \
     fi; \
     apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       xvfb \
@@ -52,7 +56,18 @@ RUN set -eux; \
       tzdata \
     && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
     && echo $TZ > /etc/timezone \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && echo "pip index=${PIP_INDEX_URL}" \
+    && pip install --no-cache-dir --ignore-installed \
+        -i "${PIP_INDEX_URL}" --trusted-host "${PIP_TRUSTED_HOST}" \
+        "fastapi>=0.162.0" \
+        "uvicorn[standard]>=0.54.0" \
+        "httpx>=0.28.1" \
+        "pillow>=13.0.0" \
+        "playwright==1.64.1" \
+        "pydantic-settings>=2.16.2" \
+        "python-dotenv>=1.2.4" \
+        pyzbar
 
 COPY pyproject.toml README.md ./
 COPY src ./src
@@ -60,48 +75,7 @@ COPY web ./web
 COPY main.py login_worker.py run.sh ./
 COPY scripts/entrypoint.sh /entrypoint.sh
 
-# ARG 在 FROM 后需再次声明才能在本层使用
-ARG USE_CHINA_MIRROR=1
-ARG PIP_INDEX_URL=
-ARG PIP_TRUSTED_HOST=
-
-RUN set -eux; \
-    if [ -n "${PIP_INDEX_URL}" ]; then \
-      INDEX_URL="${PIP_INDEX_URL}"; \
-      TRUSTED_HOST="${PIP_TRUSTED_HOST:-}"; \
-    elif [ "${USE_CHINA_MIRROR}" = "1" ]; then \
-      INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple/"; \
-      TRUSTED_HOST="pypi.tuna.tsinghua.edu.cn"; \
-    else \
-      INDEX_URL="https://pypi.org/simple/"; \
-      TRUSTED_HOST="pypi.org"; \
-    fi; \
-    echo "pip index=${INDEX_URL}"; \
-    if [ -n "${TRUSTED_HOST}" ]; then \
-      pip install --no-cache-dir --ignore-installed \
-        -i "${INDEX_URL}" --trusted-host "${TRUSTED_HOST}" \
-        "fastapi>=0.162.0" \
-        "uvicorn[standard]>=0.54.0" \
-        "httpx>=0.28.1" \
-        "pillow>=13.0.0" \
-        "playwright==1.64.1" \
-        "pydantic-settings>=2.16.2" \
-        "python-dotenv>=1.2.4" \
-        pyzbar; \
-    else \
-      pip install --no-cache-dir --ignore-installed \
-        -i "${INDEX_URL}" \
-        "fastapi>=0.162.0" \
-        "uvicorn[standard]>=0.54.0" \
-        "httpx>=0.28.1" \
-        "pillow>=13.0.0" \
-        "playwright==1.64.1" \
-        "pydantic-settings>=2.16.2" \
-        "python-dotenv>=1.2.4" \
-        pyzbar; \
-    fi; \
-    chmod +x /entrypoint.sh; \
-    mkdir -p /data/challenges
+RUN chmod +x /entrypoint.sh && mkdir -p /data/challenges
 
 EXPOSE 8056 7900
 VOLUME ["/data"]
