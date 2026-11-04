@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -12,7 +13,7 @@ from src.config import data_path, settings
 from src.logbus import log_bus
 from src.login.browser import BrowserSession, cookies_from_context
 from src.login.exceptions import BrowserUnavailableError, LoginFinished
-from src.login.qrcode_util import decode_qr_from_image
+from src.login.qrcode_util import decode_qr_from_bytes
 from src.store.sessions import SessionStore
 from src.webhook import send_webhook
 
@@ -32,16 +33,118 @@ SESSION_ERR_HINTS = (
     "connection refused",
     "session closed",
     "has been closed",
-    "execution context was destroyed",
     "timed out receiving message",
     "no such window",
     "invalid session",
+)
+
+# 页面跳转中 evaluate 失败是正常竞态，不是浏览器挂死
+NAV_RACE_HINTS = (
+    "execution context was destroyed",
+    "most likely because of a navigation",
+    "frame was detached",
+    "navigating frame was detached",
 )
 
 CancelCheck = Callable[[], bool]
 HumanInputPop = Callable[[], dict[str, Any] | None]
 SetWaiting = Callable[[str, dict[str, Any]], None]
 SetRunning = Callable[[], None]
+
+
+class _StepProgress:
+    """记录当前子步骤，供心跳日志输出。"""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.step = "init"
+        self.detail = ""
+        self.started_at = time.time()
+
+    def set(self, step: str, detail: str = "") -> None:
+        with self._lock:
+            self.step = step
+            self.detail = detail
+            self.started_at = time.time()
+        extra = f" · {detail}" if detail else ""
+        log_bus.emit(f"进度 → {step}{extra}")
+
+    def snapshot(self) -> tuple[str, str, float]:
+        with self._lock:
+            return self.step, self.detail, time.time() - self.started_at
+
+
+class _CancelWatchdog:
+    """后台：心跳日志 + 取消/阶段超时强杀浏览器。"""
+
+    def __init__(
+        self,
+        cancel_check: CancelCheck,
+        session: BrowserSession,
+        *,
+        progress: _StepProgress,
+        phase_deadline_holder: list[float] | None = None,
+        interval: float = 0.5,
+        heartbeat_every: float = 2.0,
+    ) -> None:
+        self._cancel_check = cancel_check
+        self._session = session
+        self._progress = progress
+        self._phase_deadline_holder = phase_deadline_holder
+        self._interval = interval
+        self._heartbeat_every = heartbeat_every
+        self._stop = threading.Event()
+        self.forced = False
+        self.timed_out = False
+        self._last_hb = 0.0
+        self._thread = threading.Thread(target=self._run, name="cancel-watchdog", daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._thread.join(timeout=2)
+
+    def set_phase_deadline(self, ts: float) -> None:
+        if self._phase_deadline_holder is not None:
+            self._phase_deadline_holder[0] = ts
+
+    def _run(self) -> None:
+        while not self._stop.wait(self._interval):
+            try:
+                now = time.time()
+                if now - self._last_hb >= self._heartbeat_every:
+                    self._last_hb = now
+                    step, detail, elapsed = self._progress.snapshot()
+                    remain = None
+                    if self._phase_deadline_holder:
+                        remain = max(0.0, self._phase_deadline_holder[0] - now)
+                    extra = f" · {detail}" if detail else ""
+                    rem = f" phase剩余={remain:.0f}s" if remain is not None else ""
+                    log_bus.emit(
+                        f"心跳 当前={step}{extra} 已停留={elapsed:.1f}s{rem}"
+                    )
+
+                if self._cancel_check():
+                    self.forced = True
+                    log_bus.emit("取消看门狗：SIGKILL 浏览器以打断阻塞操作")
+                    self._session.force_close()
+                    return
+                holder = self._phase_deadline_holder
+                if holder and now > holder[0]:
+                    self.timed_out = True
+                    self.forced = True
+                    step, detail, elapsed = self._progress.snapshot()
+                    log_bus.emit(
+                        f"超时看门狗：阶段超时 step={step} detail={detail!r} "
+                        f"停留={elapsed:.1f}s，SIGKILL 浏览器"
+                    )
+                    self._session.force_close()
+                    return
+            except Exception as exc:  # noqa: BLE001
+                log_bus.emit(f"看门狗异常: {exc}")
+                return
 
 
 def login(
@@ -53,10 +156,13 @@ def login(
     webhook_url: str | None,
     client_ref: str | None,
     silent: bool = False,
+    browser_session: BrowserSession | None = None,
 ) -> None:
     """执行登录；通过 LoginFinished 抛出终态，或抛 BrowserUnavailableError 供重试。"""
     deadline = time.time() + settings.login_total_timeout
-    session = BrowserSession()
+    owns_session = browser_session is None
+    session = browser_session or BrowserSession()
+    watchdog: _CancelWatchdog | None = None
 
     def cancel_check() -> bool:
         return store.is_cancel_requested(session_id)
@@ -93,12 +199,29 @@ def login(
             },
         )
 
+    # 打开/填表/点击阶段硬限 20s（含启动浏览器；假死靠看门狗 SIGKILL）
+    phase_deadline_holder = [time.time() + 20]
+    progress = _StepProgress()
     try:
         _raise_if_cancelled(cancel_check)
-        page = session.start()
+        # 看门狗必须先于浏览器启动：启动 chromium / goto 都可能假死
+        watchdog = _CancelWatchdog(
+            cancel_check,
+            session,
+            progress=progress,
+            phase_deadline_holder=phase_deadline_holder,
+        )
+        watchdog.start()
+        progress.set("0.准备浏览器")
+        page = session.new_page() if browser_session is not None else session.start()
         _raise_if_cancelled(cancel_check)
-        _open_and_fill(page, username, password, cancel_check=cancel_check)
-        _click_login(page, cancel_check=cancel_check)
+        _open_and_fill(
+            page, username, password, cancel_check=cancel_check, progress=progress
+        )
+        _click_login(page, cancel_check=cancel_check, progress=progress)
+        # 状态轮询：单次 Playwright 调用卡死超过该窗口则强杀；每轮成功会续期
+        phase_deadline_holder[0] = time.time() + 60
+        progress.set("4.状态轮询")
         _poll_status(
             page=page,
             context=session.context,
@@ -106,26 +229,85 @@ def login(
             username=username,
             silent=silent,
             deadline_holder=[deadline],
+            phase_deadline_holder=phase_deadline_holder,
             cancel_check=cancel_check,
             pop_input=pop_input,
             set_waiting=set_waiting,
             set_running=set_running,
+            progress=progress,
         )
     except LoginFinished:
         raise
     except BrowserUnavailableError:
+        if watchdog and watchdog.timed_out:
+            raise LoginFinished(
+                error_code="timeout", error_message="登录操作超时（浏览器无响应）"
+            ) from None
+        if watchdog and watchdog.forced:
+            raise LoginFinished(
+                cancelled=True, error_code="cancelled", error_message="已取消"
+            ) from None
         raise
     except PlaywrightError as exc:
+        if watchdog and watchdog.timed_out:
+            raise LoginFinished(
+                error_code="timeout", error_message="登录操作超时（浏览器无响应）"
+            ) from exc
+        if watchdog and watchdog.forced:
+            raise LoginFinished(
+                cancelled=True, error_code="cancelled", error_message="已取消"
+            ) from exc
+        if cancel_check():
+            raise LoginFinished(
+                cancelled=True, error_code="cancelled", error_message="已取消"
+            ) from exc
         if _is_session_error(exc):
             raise BrowserUnavailableError(str(exc)) from exc
         raise
     finally:
-        session.close()
+        # 先清理页面，再停看门狗：close 若卡死仍可由取消/超时 SIGKILL
+        try:
+            if owns_session:
+                session.close()
+            elif session._force_closed:  # noqa: SLF001
+                try:
+                    session.close()
+                except Exception:  # noqa: BLE001
+                    pass
+            elif session.page is not None:
+                page_to_close = session.page
+                session.page = None
+
+                def _close_page() -> None:
+                    try:
+                        page_to_close.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+
+                t = threading.Thread(target=_close_page, name="page-close", daemon=True)
+                t.start()
+                t.join(timeout=2.0)
+                if t.is_alive():
+                    log_bus.emit("关闭页面超时，强制杀浏览器")
+                    try:
+                        session.force_close()
+                    except Exception:  # noqa: BLE001
+                        pass
+        finally:
+            if watchdog is not None:
+                watchdog.stop()
 
 
 def _is_session_error(exc: BaseException) -> bool:
     msg = str(exc).lower()
+    if _is_navigation_race(exc):
+        return False
     return any(h in msg for h in SESSION_ERR_HINTS)
+
+
+def _is_navigation_race(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return any(h in msg for h in NAV_RACE_HINTS)
 
 
 def _is_blank_url(url: str) -> bool:
@@ -134,17 +316,25 @@ def _is_blank_url(url: str) -> bool:
 
 
 def _ensure_alive(page: Page) -> None:
-    try:
-        url = page.url
-        if _is_blank_url(url):
-            raise BrowserUnavailableError(f"页面变为空白页: {url!r}")
-        _ = page.evaluate("() => document.readyState")
-    except BrowserUnavailableError:
-        raise
-    except Exception as exc:  # noqa: BLE001
-        if _is_session_error(exc):
-            raise BrowserUnavailableError(str(exc)) from exc
-        raise BrowserUnavailableError(f"会话检测失败: {exc}") from exc
+    last_exc: Exception | None = None
+    for _ in range(3):
+        try:
+            url = page.url
+            if _is_blank_url(url):
+                raise BrowserUnavailableError(f"页面变为空白页: {url!r}")
+            _ = page.evaluate("() => document.readyState")
+            return
+        except BrowserUnavailableError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            if _is_navigation_race(exc):
+                time.sleep(0.15)
+                continue
+            if _is_session_error(exc):
+                raise BrowserUnavailableError(str(exc)) from exc
+            raise BrowserUnavailableError(f"会话检测失败: {exc}") from exc
+    raise BrowserUnavailableError(f"会话检测失败(持续跳转): {last_exc}")
 
 
 def _raise_if_cancelled(cancel_check: CancelCheck) -> None:
@@ -163,15 +353,22 @@ def _interruptible_sleep(seconds: float, cancel_check: CancelCheck, *, step: flo
         time.sleep(min(step, remaining))
 
 
-def _open_login_page(page: Page, *, cancel_check: CancelCheck) -> None:
-    log_bus.emit("步骤1 打开登录页面")
+def _open_login_page(
+    page: Page, *, cancel_check: CancelCheck, progress: _StepProgress
+) -> None:
+    progress.set("1.打开登录页", settings.login_url)
     last_err: Exception | None = None
     for attempt in range(1, 4):
         _raise_if_cancelled(cancel_check)
+        progress.set("1.goto", f"attempt={attempt} url={settings.login_url}")
         try:
-            page.goto(settings.login_url, wait_until="domcontentloaded", timeout=12_000)
+            # commit 比 domcontentloaded 更早返回；timeout 仅作期望值，假死靠看门狗杀进程
+            t0 = time.time()
+            page.goto(settings.login_url, wait_until="commit", timeout=6_000)
+            log_bus.emit(f"步骤1 goto返回 attempt={attempt} 耗时={(time.time()-t0)*1000:.0f}ms url={page.url}")
         except PlaywrightTimeoutError as exc:
             last_err = exc
+            log_bus.emit(f"步骤1 goto超时 attempt={attempt} err={exc}")
             try:
                 page.evaluate("() => window.stop()")
             except Exception:  # noqa: BLE001
@@ -180,38 +377,68 @@ def _open_login_page(page: Page, *, cancel_check: CancelCheck) -> None:
             if _is_session_error(exc):
                 raise BrowserUnavailableError(str(exc)) from exc
             last_err = exc
+            log_bus.emit(f"步骤1 goto失败 attempt={attempt} err={exc}")
 
-        end = time.time() + 12
+        progress.set("1.等待表单", f"attempt={attempt}")
+        end = time.time() + 6
         while time.time() < end:
             _raise_if_cancelled(cancel_check)
             try:
                 url = page.url
                 if _is_blank_url(url):
-                    _interruptible_sleep(0.25, cancel_check)
+                    progress.set("1.等待表单", "blank url")
+                    _interruptible_sleep(0.2, cancel_check)
                     continue
-                # 用轻量 DOM 探测代替反复 page.content()，避免服务端卡顿
                 ready = page.evaluate(
                     """() => {
                       const form = document.querySelector('#submit-form');
+                      const account = document.querySelector('#uc-common-account');
                       return {
                         ready: document.readyState,
-                        hasForm: !!form,
+                        hasForm: !!(form || account),
                         bodyLen: (document.body && document.body.innerText)
                           ? document.body.innerText.length : 0,
                       };
                     }"""
                 )
-                if ready.get("ready") in ("interactive", "complete") and (
-                    ready.get("hasForm") or int(ready.get("bodyLen") or 0) >= 40
+                progress.set(
+                    "1.等待表单",
+                    f"ready={ready.get('ready')} hasForm={ready.get('hasForm')} "
+                    f"bodyLen={ready.get('bodyLen')} url={url[:80]}",
+                )
+                if ready.get("hasForm") or (
+                    ready.get("ready") in ("interactive", "complete")
+                    and int(ready.get("bodyLen") or 0) >= 40
                 ):
-                    log_bus.emit(f"步骤1 登录页就绪 url={url}")
+                    try:
+                        progress.set("1.wait_for_selector", "#uc-common-account")
+                        page.wait_for_selector(
+                            "#submit-form, #uc-common-account",
+                            timeout=4_000,
+                            state="attached",
+                        )
+                    except PlaywrightTimeoutError as exc:
+                        last_err = exc
+                        log_bus.emit(f"步骤1 等账号框超时: {exc}")
+                        break
+                    progress.set("1.登录页就绪", url[:120])
                     return
             except Exception as exc:  # noqa: BLE001
                 last_err = exc
-                if _is_session_error(exc):
-                    raise BrowserUnavailableError(str(exc)) from exc
-            _interruptible_sleep(0.25, cancel_check)
-        log_bus.emit(f"步骤1 第 {attempt} 次打开仍未就绪，重试")
+                if _is_navigation_race(exc):
+                    # 首页→登录页跳转瞬间 evaluate 必失败，继续轮询即可
+                    progress.set("1.等待表单", "页面跳转中，重探DOM")
+                else:
+                    log_bus.emit(f"步骤1 探测DOM异常: {exc}")
+                    if _is_session_error(exc):
+                        raise BrowserUnavailableError(str(exc)) from exc
+            _interruptible_sleep(0.2, cancel_check)
+        log_bus.emit(f"步骤1 第 {attempt} 次打开仍未就绪，重试 last_err={last_err}")
+        try:
+            progress.set("1.重置about:blank")
+            page.goto("about:blank", wait_until="commit", timeout=2_000)
+        except Exception:  # noqa: BLE001
+            pass
     raise BrowserUnavailableError(f"三次打开登录页均为空页或未就绪: {last_err}")
 
 
@@ -231,36 +458,50 @@ def _human_move(page: Page, cancel_check: CancelCheck) -> None:
 
 
 def _fill_credentials(
-    page: Page, username: str, password: str, *, cancel_check: CancelCheck
+    page: Page,
+    username: str,
+    password: str,
+    *,
+    cancel_check: CancelCheck,
+    progress: _StepProgress,
 ) -> None:
-    page.wait_for_selector("#submit-form", timeout=10_000)
+    progress.set("2.等待账号输入框")
+    page.wait_for_selector("#uc-common-account", timeout=6_000)
     _raise_if_cancelled(cancel_check)
+    progress.set("2.模拟鼠标移动")
     _human_move(page, cancel_check)
-    _interruptible_sleep(0.4, cancel_check)
+    _interruptible_sleep(0.15, cancel_check)
+    progress.set("2.填写账号", username)
     account = page.locator("#uc-common-account")
-    account.click()
-    account.fill("")
-    # fill 比逐字 type 快且稳定；保留短延迟模拟输入
-    account.type(username, delay=random.randint(20, 45))
+    account.click(timeout=3_000)
+    account.fill(username, timeout=3_000)
+    log_bus.emit("步骤2 账号已填入")
     _raise_if_cancelled(cancel_check)
-    _interruptible_sleep(0.3, cancel_check)
+    progress.set("2.填写密码")
     pwd = page.locator("#ucsl-password-edit")
-    pwd.click()
-    pwd.fill("")
-    pwd.type(password, delay=random.randint(20, 45))
-    _interruptible_sleep(0.3, cancel_check)
+    pwd.click(timeout=3_000)
+    pwd.fill(password, timeout=3_000)
+    log_bus.emit("步骤2 密码已填入")
+    _interruptible_sleep(0.15, cancel_check)
 
 
 def _open_and_fill(
-    page: Page, username: str, password: str, *, cancel_check: CancelCheck
+    page: Page,
+    username: str,
+    password: str,
+    *,
+    cancel_check: CancelCheck,
+    progress: _StepProgress,
 ) -> None:
     last_err: Exception | None = None
     for attempt in range(1, 4):
         _raise_if_cancelled(cancel_check)
         try:
-            _open_login_page(page, cancel_check=cancel_check)
-            _fill_credentials(page, username, password, cancel_check=cancel_check)
-            log_bus.emit("步骤2 账号密码填写完成")
+            _open_login_page(page, cancel_check=cancel_check, progress=progress)
+            _fill_credentials(
+                page, username, password, cancel_check=cancel_check, progress=progress
+            )
+            progress.set("2.账号密码填写完成")
             return
         except LoginFinished:
             raise
@@ -274,12 +515,17 @@ def _open_and_fill(
     raise BrowserUnavailableError(f"表单元素不可用: {last_err}")
 
 
-def _click_login(page: Page, *, cancel_check: CancelCheck) -> None:
+def _click_login(
+    page: Page, *, cancel_check: CancelCheck, progress: _StepProgress
+) -> None:
+    progress.set("3.点击前存活检查")
     _ensure_alive(page)
     _raise_if_cancelled(cancel_check)
-    log_bus.emit("步骤3 点击登录")
+    progress.set("3.点击登录按钮")
     before = page.url or ""
-    page.locator("#submit-form").click()
+    page.locator("#submit-form").click(timeout=3_000)
+    log_bus.emit("步骤3 已点击登录，等待跳转/挑战")
+    progress.set("3.等待跳转或挑战")
     # 轮询等待跳转/挑战出现，替代固定 sleep(5)，并可响应取消
     deadline = time.time() + 8
     while time.time() < deadline:
@@ -427,48 +673,101 @@ def _capture_captcha_challenge(page: Page, session_id: str) -> dict[str, Any]:
     }
 
 
-def _capture_security_challenge(page: Page, session_id: str) -> dict[str, Any]:
-    png: bytes | None = None
-    # 尝试常见二维码 img
-    for sel in ("img[src*='qr']", "img.qrcode", "canvas", "img"):
+def _qr_content_from_dom(page: Page) -> str | None:
+    """优先从页面直接取扫码内容，避免截图识别。"""
+    try:
+        raw = page.evaluate(
+            r"""() => {
+              const pick = (v) => (typeof v === 'string' && v.trim().length > 8) ? v.trim() : null;
+              for (const el of document.querySelectorAll('[data-qr],[data-qrcode],[data-url],[data-content]')) {
+                for (const k of ['data-qr','data-qrcode','data-url','data-content']) {
+                  const v = pick(el.getAttribute(k));
+                  if (v) return v;
+                }
+              }
+              const html = document.documentElement ? document.documentElement.innerHTML : '';
+              const m = html.match(/https?:\/\/[-a-zA-Z0-9@:%._+~#=]{8,}\/[^"'\s<>]{8,}/);
+              if (m && /qr|scan|passport|wappass|aq\.baidu/i.test(m[0])) return m[0];
+              return null;
+            }"""
+        )
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip()
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def _screenshot_qr_element(page: Page) -> bytes | None:
+    """只截二维码元素，避免全页截图 + 全图识别过慢。"""
+    selectors = (
+        "img[src*='qr']",
+        "img[src*='QR']",
+        "img.qrcode",
+        "img[class*='qr']",
+        "canvas.qrcode",
+        "canvas[class*='qr']",
+        "#qrcode canvas",
+        "#qrcode img",
+        ".qrcode canvas",
+        ".qrcode img",
+        "canvas",
+    )
+    for sel in selectors:
         loc = page.locator(sel)
         try:
-            if loc.count() == 0:
+            n = loc.count()
+            if n == 0:
                 continue
-            target = loc.first
-            if not target.is_visible():
-                continue
-            box = target.bounding_box()
-            if not box or box["width"] < 40 or box["height"] < 40:
-                continue
-            full = page.screenshot(full_page=False)
-            from io import BytesIO
-
-            from PIL import Image
-
-            image = Image.open(BytesIO(full))
-            cropped = image.crop(
-                (
-                    int(box["x"]),
-                    int(box["y"]),
-                    int(box["x"] + box["width"]),
-                    int(box["y"] + box["height"]),
-                )
-            )
-            buf = BytesIO()
-            cropped.save(buf, format="PNG")
-            png = buf.getvalue()
-            break
+            limit = min(n, 4)
+            for i in range(limit):
+                target = loc.nth(i)
+                if not target.is_visible():
+                    continue
+                box = target.bounding_box()
+                if not box:
+                    continue
+                # 二维码通常接近正方形且有一定尺寸
+                if box["width"] < 60 or box["height"] < 60:
+                    continue
+                ratio = box["width"] / max(box["height"], 1)
+                if ratio < 0.6 or ratio > 1.5:
+                    continue
+                png = target.screenshot(type="png", timeout=3_000)
+                if png and len(png) > 200:
+                    return png
         except Exception:  # noqa: BLE001
             continue
-    if png is None:
-        png = page.screenshot(full_page=False)
+    return None
 
-    path = _save_challenge_image(session_id, png)
-    qr_content = decode_qr_from_image(path)
+
+def _capture_security_challenge(page: Page, session_id: str) -> dict[str, Any]:
+    t0 = time.time()
+    qr_content = _qr_content_from_dom(page)
+    png = _screenshot_qr_element(page)
+    if png is None:
+        # 最后兜底：只截视口中心区域，不扫整页
+        try:
+            vp = page.viewport_size or {"width": 1280, "height": 720}
+            cw = min(420, int(vp["width"]))
+            ch = min(420, int(vp["height"]))
+            clip = {
+                "x": max(0, (vp["width"] - cw) / 2),
+                "y": max(0, (vp["height"] - ch) / 2 - 40),
+                "width": cw,
+                "height": ch,
+            }
+            png = page.screenshot(type="png", clip=clip, timeout=3_000)
+        except Exception:  # noqa: BLE001
+            png = page.screenshot(type="png", full_page=False, timeout=5_000)
+
+    path = _save_challenge_image(session_id, png or b"")
+    if not qr_content and png:
+        qr_content = decode_qr_from_bytes(png)
     expires = time.time() + settings.security_wait_seconds
     log_bus.emit(
-        f"安全验证二维码已保存 decoded={'yes' if qr_content else 'no'} path={path}"
+        f"安全验证二维码已保存 decoded={'yes' if qr_content else 'no'} "
+        f"path={path} cost={(time.time()-t0)*1000:.0f}ms"
     )
     return {
         "type": "security_qr",
@@ -487,12 +786,15 @@ def _wait_human_captcha(
     set_waiting: SetWaiting,
     set_running: SetRunning,
     deadline_holder: list[float],
+    phase_deadline_holder: list[float] | None = None,
 ) -> None:
     challenge = _capture_captcha_challenge(page, session_id)
     set_waiting("waiting_captcha", challenge)
     log_bus.emit("步骤4 等待人工验证码")
     wait_deadline = time.time() + settings.captcha_wait_seconds
     deadline_holder[0] = max(deadline_holder[0], wait_deadline)
+    if phase_deadline_holder is not None:
+        phase_deadline_holder[0] = max(phase_deadline_holder[0], wait_deadline + 15)
 
     while time.time() < wait_deadline:
         _raise_if_cancelled(cancel_check)
@@ -524,12 +826,15 @@ def _wait_security_scan(
     set_waiting: SetWaiting,
     set_running: SetRunning,
     deadline_holder: list[float],
+    phase_deadline_holder: list[float] | None = None,
 ) -> None:
     challenge = _capture_security_challenge(page, session_id)
     set_waiting("waiting_security", challenge)
     log_bus.emit("步骤4 等待安全扫码")
     wait_deadline = time.time() + settings.security_wait_seconds
     deadline_holder[0] = max(deadline_holder[0], wait_deadline)
+    if phase_deadline_holder is not None:
+        phase_deadline_holder[0] = max(phase_deadline_holder[0], wait_deadline + 15)
     last_refresh = 0.0
 
     while time.time() < wait_deadline:
@@ -573,6 +878,8 @@ def _poll_status(
     pop_input: HumanInputPop,
     set_waiting: SetWaiting,
     set_running: SetRunning,
+    phase_deadline_holder: list[float] | None = None,
+    progress: _StepProgress | None = None,
 ) -> None:
     gateway502 = 0
     unknown = 0
@@ -583,6 +890,13 @@ def _poll_status(
         _raise_if_cancelled(cancel_check)
         if time.time() > deadline_holder[0]:
             raise LoginFinished(error_code="timeout", error_message="登录超时")
+        # 轮询阶段每轮续期，避免正常等待被阶段看门狗误杀；卡死时由 CDP 无响应+续期停止体现
+        if phase_deadline_holder is not None:
+            phase_deadline_holder[0] = max(
+                phase_deadline_holder[0], time.time() + 45
+            )
+        if progress is not None:
+            progress.set("4.状态轮询", f"round={round_i}")
 
         _ensure_alive(page)
         _interruptible_sleep(0.6, cancel_check)
@@ -648,6 +962,7 @@ def _poll_status(
                 set_waiting=set_waiting,
                 set_running=set_running,
                 deadline_holder=deadline_holder,
+                phase_deadline_holder=phase_deadline_holder,
             )
             unknown = 0
             login_stuck = 0
@@ -667,6 +982,7 @@ def _poll_status(
                 set_waiting=set_waiting,
                 set_running=set_running,
                 deadline_holder=deadline_holder,
+                phase_deadline_holder=phase_deadline_holder,
             )
             unknown = 0
             login_stuck = 0
@@ -679,17 +995,17 @@ def _poll_status(
                 error_message="需要滑块验证" if not silent else "静默模式：需要滑块验证，已跳过",
             )
 
-        # 仍停在登录表单：可能点击未生效或页面无响应；最多重点 2 次后快速失败
+        # 仍停在登录表单：可能点击未生效或页面无响应；尽快失败避免队列堵死
         if on_login:
             login_stuck += 1
-            if login_stuck in (10, 20) and reclick_count < 2:
-                log_bus.emit(f"步骤4 仍停在登录页，重新点击登录（第 {reclick_count + 1} 次）")
+            if login_stuck == 6 and reclick_count < 1:
+                log_bus.emit("步骤4 仍停在登录页，重新点击登录")
                 try:
                     page.locator("#submit-form").click(timeout=3_000)
                     reclick_count += 1
                 except Exception as exc:  # noqa: BLE001
                     log_bus.emit(f"重新点击登录失败: {exc}")
-            if login_stuck >= min(25, settings.login_unknown_limit):
+            if login_stuck >= 12:
                 log_bus.emit("步骤6 登录失败 code=login_page_stuck")
                 raise LoginFinished(
                     error_code="login_page_stuck",

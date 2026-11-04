@@ -24,7 +24,7 @@ from src.auth import (
 )
 from src.config import ensure_data_dir, settings
 from src.gui_settings import load_gui_settings, read_vnc_password, save_gui_settings
-from src.logbus import log_bus, setup_logging
+from src.logbus import log_bus, relay_worker_logs, setup_logging
 from src.schemas import (
     CaptchaSubmitRequest,
     CreateSessionRequest,
@@ -77,9 +77,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     ensure_data_dir()
     app.state.store = SessionStore(settings.queue_db_path)
     log_bus.bind_loop(asyncio.get_running_loop())
+    stop_relay = asyncio.Event()
+    relay_task = asyncio.create_task(relay_worker_logs(stop_relay), name="relay-worker-logs")
     mode = "cookie+bearer" if console_auth_enabled() else "bearer-only"
     log_bus.emit(f"API 启动 db={settings.queue_db_path} auth={mode}")
-    yield
+    try:
+        yield
+    finally:
+        stop_relay.set()
+        relay_task.cancel()
+        try:
+            await relay_task
+        except asyncio.CancelledError:
+            pass
 
 
 app = FastAPI(
@@ -330,7 +340,11 @@ async def wslog(ws: WebSocket) -> None:
     await ws.accept()
     q = log_bus.subscribe()
     try:
-        await ws.send_text("connected")
+        import time as _time
+
+        await ws.send_text(
+            f"[{_time.strftime('%Y-%m-%d %H:%M:%S')}] connected"
+        )
         while True:
             line = await q.get()
             await ws.send_text(line)

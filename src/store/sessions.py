@@ -413,20 +413,25 @@ class SessionStore:
             conn.commit()
         return self.get(session_id)
 
-    def finish_cancel_requested(self) -> list[SessionRecord]:
-        """收尾僵尸取消：queued+cancel_requested（claim 会跳过），直接标 cancelled。
-
-        running/waiting 仍由正在执行的 worker 检测 cancel_requested 后结束，
-        避免与进行中的 Playwright 竞态覆写终态。
-        """
+    def finish_cancel_requested(self, *, stale_running_seconds: float = 45.0) -> list[SessionRecord]:
+        """收尾取消：queued 立即 cancelled；running/waiting 超时未退出也强制收尾。"""
         now = time.time()
         finished: list[SessionRecord] = []
         with self._connect() as conn:
             rows = conn.execute(
                 """
                 SELECT id FROM sessions
-                WHERE cancel_requested = 1 AND status = 'queued'
-                """
+                WHERE cancel_requested = 1
+                  AND (
+                    status = 'queued'
+                    OR (
+                      status IN ('running','waiting_captcha','waiting_security')
+                      AND claimed_at IS NOT NULL
+                      AND claimed_at < ?
+                    )
+                  )
+                """,
+                (now - max(5.0, stale_running_seconds),),
             ).fetchall()
             ids = [str(r["id"]) for r in rows]
             for sid in ids:
@@ -436,7 +441,8 @@ class SessionStore:
                     SET status='cancelled', password=NULL, error_json=?,
                         challenge_json=NULL, human_input_json=NULL,
                         finished_at=?, updated_at=?, claimed_at=NULL
-                    WHERE id=? AND status = 'queued' AND cancel_requested = 1
+                    WHERE id=? AND cancel_requested = 1
+                      AND status NOT IN ('succeeded','failed','cancelled')
                     """,
                     (
                         json.dumps(

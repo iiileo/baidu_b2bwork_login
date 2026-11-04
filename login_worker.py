@@ -8,13 +8,14 @@ from typing import Any
 
 from src.config import ensure_data_dir, settings
 from src.logbus import log_bus, setup_logging
-from src.login import BrowserUnavailableError, LoginFinished, login
+from src.login import BrowserSession, BrowserUnavailableError, LoginFinished, login
 from src.store import SessionStore
 from src.webhook import send_webhook
 
 _store: SessionStore | None = None
 _current_id: str | None = None
 _stopping = False
+_browser: BrowserSession | None = None
 
 
 def _retry_delay(attempts: int) -> float:
@@ -63,11 +64,33 @@ def _handle_signal(signum: int, _frame: Any) -> None:
     global _stopping
     log_bus.emit(f"收到退出信号 {signum}")
     _stopping = True
+    if _browser is not None:
+        try:
+            _browser.force_close()
+        except Exception:  # noqa: BLE001
+            pass
     if _store is not None and _current_id is not None:
         try:
             _store.release_for_retry(_current_id, delay_seconds=0)
         except Exception as exc:  # noqa: BLE001
             log_bus.emit(f"释放会话失败: {exc}")
+
+
+def _get_browser() -> BrowserSession:
+    global _browser
+    if _browser is None:
+        _browser = BrowserSession()
+    return _browser
+
+
+def _reset_browser() -> None:
+    global _browser
+    if _browser is not None:
+        try:
+            _browser.close()
+        except Exception:  # noqa: BLE001
+            pass
+        _browser = None
 
 
 def process_once(store: SessionStore) -> bool:
@@ -107,6 +130,7 @@ def process_once(store: SessionStore) -> bool:
                 webhook_url=claimed.webhook_url,
                 client_ref=claimed.client_ref,
                 silent=claimed.silent,
+                browser_session=_get_browser(),
             )
             # login 正常不应落到这里（应 LoginFinished）
             finished = store.finish(
@@ -116,6 +140,8 @@ def process_once(store: SessionStore) -> bool:
             )
             if finished:
                 _emit_finished(finished, "failed")
+            if _browser is not None and getattr(_browser, "_force_closed", False):
+                _reset_browser()
         except LoginFinished as done:
             if done.cancelled:
                 log_bus.emit(
@@ -159,11 +185,17 @@ def process_once(store: SessionStore) -> bool:
                     f"error={finished.error} result_keys="
                     f"{list((finished.result or {}).keys())}"
                 )
+            if done.cancelled or (
+                _browser is not None and getattr(_browser, "_force_closed", False)
+            ):
+                _reset_browser()
         except BrowserUnavailableError as exc:
             log_bus.emit(f"浏览器不可用: {exc}")
+            _reset_browser()
             _fail_or_retry(store, claimed, browser=True, exc=exc)
         except Exception as exc:  # noqa: BLE001
             log_bus.emit(f"登录异常: {exc}")
+            _reset_browser()
             _fail_or_retry(store, claimed, browser=False, exc=exc)
     finally:
         _current_id = None
@@ -244,6 +276,7 @@ def main() -> None:
         if not got:
             time.sleep(settings.login_poll_interval)
 
+    _reset_browser()
     log_bus.emit("login_worker 已退出")
 
 
