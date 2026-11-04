@@ -580,32 +580,24 @@ curl -sS -X DELETE "$HOST/v1/sessions/$ID" -H "Authorization: Bearer $API_TOKEN"
         </section>
 
         <section class="doc" id="docker-ghcr">
-          <h2>镜像发布（GHCR + 自定义 ACR）</h2>
-          <p>打 <code>v*</code> tag 后自动构建（<code>linux/amd64</code> + <code>linux/arm64</code>），推送 <code>latest</code> 与版本 tag。默认推 <strong>GHCR</strong>；配置 Secrets 后同时推自定义 <strong>ACR</strong>（如阿里云）。</p>
+          <h2>GHCR 镜像使用</h2>
+          <p>打 <code>v*</code> tag 后，GitHub Actions 会自动构建并推送到 <strong>GitHub Container Registry</strong>（<code>ghcr.io</code>），架构含 <code>linux/amd64</code> 与 <code>linux/arm64</code>，并同时推送版本 tag 与 <code>latest</code>。</p>
           <table>
             <tr><th>项</th><th>值</th></tr>
-            <tr><td>GHCR</td><td><code>ghcr.io/&lt;owner&gt;/&lt;repo&gt;</code>（全小写）</td></tr>
+            <tr><td>Registry</td><td><code>ghcr.io</code></td></tr>
+            <tr><td>镜像名</td><td><code>ghcr.io/&lt;owner&gt;/&lt;repo&gt;</code>（全小写）</td></tr>
             <tr><td>本仓库示例</td><td><code>ghcr.io/iiileo/baidu_b2bwork_login</code></td></tr>
-            <tr><td>常用 tag</td><td><code>latest</code>、<code>1.0.0</code> / <code>v1.0.0</code></td></tr>
+            <tr><td>常用 tag</td><td><code>latest</code>、<code>1.0.0</code> / <code>v1.0.0</code>（随 git tag）</td></tr>
           </table>
-
-          <h3>ACR Secrets（仓库 Settings → Secrets）</h3>
-          <table>
-            <tr><th>Secret</th><th>说明</th></tr>
-            <tr><td><code>ACR_REGISTRY</code></td><td>如 <code>registry.cn-hangzhou.aliyuncs.com</code></td></tr>
-            <tr><td><code>ACR_REPOSITORY</code></td><td>命名空间/仓库名，如 <code>my-ns/b2bwork-login</code></td></tr>
-            <tr><td><code>ACR_USERNAME</code></td><td>登录用户名</td></tr>
-            <tr><td><code>ACR_PASSWORD</code></td><td>登录密码</td></tr>
-          </table>
-          <p class="muted">未配置 <code>ACR_*</code> 时只推 GHCR。</p>
 
           <h3>拉取</h3>
-          <pre># GHCR
+          <pre># 公开包可直接拉
 docker pull ghcr.io/iiileo/baidu_b2bwork_login:latest
 
-# ACR（按你的 Secrets 替换）
-docker login registry.cn-hangzhou.aliyuncs.com
-docker pull registry.cn-hangzhou.aliyuncs.com/my-ns/b2bwork-login:latest</pre>
+# 若 Package 为 Private，先登录（PAT 需 read:packages）
+echo YOUR_GITHUB_PAT | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
+docker pull ghcr.io/iiileo/baidu_b2bwork_login:latest</pre>
+          <p class="muted">在 GitHub 仓库右侧 <strong>Packages</strong> 打开对应包 → Package settings → Change visibility，可改为 Public。</p>
         </section>
 
         <section class="doc" id="docker-run">

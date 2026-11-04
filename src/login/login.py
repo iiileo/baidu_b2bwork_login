@@ -370,7 +370,7 @@ def _open_login_page(
         try:
             # commit 比 domcontentloaded 更早返回；timeout 仅作期望值，假死靠看门狗杀进程
             t0 = time.time()
-            page.goto(settings.login_url, wait_until="commit", timeout=6_000)
+            page.goto(settings.login_url, wait_until="commit", timeout=18_000)
             log_bus.emit(f"步骤1 goto返回 attempt={attempt} 耗时={(time.time()-t0)*1000:.0f}ms url={page.url}")
         except PlaywrightTimeoutError as exc:
             last_err = exc
@@ -386,7 +386,7 @@ def _open_login_page(
             log_bus.emit(f"步骤1 goto失败 attempt={attempt} err={exc}")
 
         progress.set("1.等待表单", f"attempt={attempt}")
-        end = time.time() + 6
+        end = time.time() + 18
         while time.time() < end:
             _raise_if_cancelled(cancel_check)
             try:
@@ -420,7 +420,7 @@ def _open_login_page(
                         progress.set("1.wait_for_selector", "#uc-common-account")
                         page.wait_for_selector(
                             "#submit-form, #uc-common-account",
-                            timeout=4_000,
+                            timeout=12_000,
                             state="attached",
                         )
                     except PlaywrightTimeoutError as exc:
@@ -442,7 +442,7 @@ def _open_login_page(
         log_bus.emit(f"步骤1 第 {attempt} 次打开仍未就绪，重试 last_err={last_err}")
         try:
             progress.set("1.重置about:blank")
-            page.goto("about:blank", wait_until="commit", timeout=2_000)
+            page.goto("about:blank", wait_until="commit", timeout=6_000)
         except Exception:  # noqa: BLE001
             pass
     raise BrowserUnavailableError(f"三次打开登录页均为空页或未就绪: {last_err}")
@@ -472,23 +472,23 @@ def _fill_credentials(
     progress: _StepProgress,
 ) -> None:
     progress.set("2.等待账号输入框")
-    page.wait_for_selector("#uc-common-account", timeout=6_000)
+    page.wait_for_selector("#uc-common-account", timeout=18_000)
     _raise_if_cancelled(cancel_check)
     progress.set("2.模拟鼠标移动")
     _human_move(page, cancel_check)
     _interruptible_sleep(0.15, cancel_check)
     progress.set("2.填写账号", username)
     account = page.locator("#uc-common-account")
-    account.click(timeout=3_000)
-    account.fill("", timeout=3_000)
+    account.click(timeout=9_000)
+    account.fill("", timeout=9_000)
     # 逐字输入，模拟人工（避免一次性 fill 被风控）
     account.press_sequentially(username, delay=50)
     log_bus.emit("步骤2 账号已填入")
     _raise_if_cancelled(cancel_check)
     progress.set("2.填写密码")
     pwd = page.locator("#ucsl-password-edit")
-    pwd.click(timeout=3_000)
-    pwd.fill("", timeout=3_000)
+    pwd.click(timeout=9_000)
+    pwd.fill("", timeout=9_000)
     pwd.press_sequentially(password, delay=50)
     log_bus.emit("步骤2 密码已填入")
     _interruptible_sleep(0.15, cancel_check)
@@ -532,11 +532,11 @@ def _click_login(
     _raise_if_cancelled(cancel_check)
     progress.set("3.点击登录按钮")
     before = page.url or ""
-    page.locator("#submit-form").click(timeout=3_000)
+    page.locator("#submit-form").click(timeout=9_000)
     log_bus.emit("步骤3 已点击登录，等待跳转/挑战")
     progress.set("3.等待跳转或挑战")
     # 轮询等待跳转/挑战出现，替代固定 sleep(5)，并可响应取消
-    deadline = time.time() + 8
+    deadline = time.time() + 24
     while time.time() < deadline:
         _raise_if_cancelled(cancel_check)
         try:

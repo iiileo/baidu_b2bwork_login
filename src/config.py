@@ -63,7 +63,7 @@ class Settings(BaseSettings):
     login_url: str = "http://b2bwork.baidu.com"
     login_total_timeout: int = 600
     # 打开/填表/点击阶段看门狗（含启动浏览器）；超时走任务级重试
-    login_phase_timeout: int = 90
+    login_phase_timeout: int = 270
     login_status_max_rounds: int = 300
     login_unknown_limit: int = 30
 
