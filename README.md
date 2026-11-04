@@ -18,18 +18,18 @@ uv run python main.py
 
 - 控制台：<http://127.0.0.1:8056/ui/>（未登录会跳到 `/login`）
 - 接口文档：<http://127.0.0.1:8056/docs.html>
-- 默认控制台账号：`admin` / `admin`（`.env` 的 `BASIC_AUTH_*`）
+- 默认控制台账号：`admin` / `admin`（`.env` 的 `CONSOLE_USER` / `CONSOLE_PASSWORD`）
 - 程序调用仍可用 `Authorization: Bearer <API_TOKEN>`
 
 ## 鉴权说明
 
 | 场景 | 方式 |
 |------|------|
-| 控制台 `/ui`、VNC 代理 `/vnc` | 表单登录 + Cookie（`BASIC_AUTH_USER` / `BASIC_AUTH_PASSWORD`） |
+| 控制台 `/ui`、VNC 代理 `/vnc` | 表单登录 + Cookie（`CONSOLE_USER` / `CONSOLE_PASSWORD`） |
 | `/v1/*` API | Bearer **或** 已登录 Cookie |
 | `/login`、`/health`、`/docs.html` | 公开 |
 
-启用控制台登录后，VNC 经同源 `/vnc` 代理访问，x11vnc 无需密码；不要对外映射 7900。
+VNC 经同源 `/vnc` 代理访问，由控制台登录 Cookie 鉴权；不要对外映射 7900。
 
 ## 控制台能力
 
@@ -64,13 +64,13 @@ docker compose up --build
 ```
 
 - API / GUI / VNC 代理：`http://localhost:8056/`（仅暴露 8056）
-- Basic 默认 `admin` / `admin`，请在环境变量中修改
+- 控制台默认 `admin` / `admin`，请在环境变量中修改
 - 数据卷：`/data`
 - `shm_size: 2gb`
 
 ### GitHub Actions → GHCR（`ghcr.io`）
 
-推送 `main` 或打 `v*` tag 时自动构建并推送到 **GitHub Container Registry**（`linux/amd64` + `linux/arm64`）。使用内置 `GITHUB_TOKEN`，无需 Docker Hub Secret。
+打 `v*` tag 时自动构建并推送到 **GitHub Container Registry**（`linux/amd64` + `linux/arm64`），同时打上版本 tag（如 `1.0.0` / `v1.0.0`）与 `latest`。使用内置 `GITHUB_TOKEN`，无需 Docker Hub Secret。
 
 #### 拉取
 
@@ -91,8 +91,8 @@ docker run -d --name b2bwork-login \
   -p 8056:8056 \
   -e API_TOKEN=change-me \
   -e WEBHOOK_SECRET=change-me \
-  -e BASIC_AUTH_USER=admin \
-  -e BASIC_AUTH_PASSWORD=change-me \
+  -e CONSOLE_USER=admin \
+  -e CONSOLE_PASSWORD=change-me \
   -e ENABLE_VNC=true \
   -e PLAYWRIGHT_HEADLESS=false \
   -v b2bwork_data:/data \

@@ -71,13 +71,11 @@
       tokenField.classList.add("hidden");
       btnSave.classList.add("hidden");
       btnLogout.classList.remove("hidden");
-      $("vncPasswordBlock").classList.add("hidden");
     } else {
       label.textContent = "Bearer Token";
       tokenField.classList.remove("hidden");
       btnSave.classList.remove("hidden");
       btnLogout.classList.add("hidden");
-      $("vncPasswordBlock").classList.remove("hidden");
     }
   }
 
@@ -97,7 +95,7 @@
     el.scrollTop = el.scrollHeight;
   }
 
-  function applyVncFrame(url, password) {
+  function applyVncFrame(url) {
     $("vncUrlLabel").textContent = url || "(未配置)";
     const frame = $("vncFrame");
     const empty = $("vncEmpty");
@@ -110,9 +108,6 @@
     try {
       const u = new URL(url, window.location.origin);
       const viaProxy = u.pathname.startsWith("/vnc");
-      if (!viaProxy && password && !u.searchParams.get("password")) {
-        u.searchParams.set("password", password);
-      }
       if (!u.searchParams.has("autoconnect")) u.searchParams.set("autoconnect", "true");
       if (!u.searchParams.has("resize")) u.searchParams.set("resize", "scale");
       if (viaProxy && !u.searchParams.get("path")) {
@@ -138,23 +133,7 @@
     const pri = data.default_priority || 1;
     $("defaultPriority").value = pri;
     $("testPriority").value = pri;
-    if ($("vncPwdStatus")) {
-      $("vncPwdStatus").textContent = data.vnc_password_set
-        ? "服务端已保存 VNC 密码（不会回显明文）。"
-        : "服务端尚未设置 VNC 密码。";
-    }
-    let embedPassword = "";
-    const pageUrl = data.vnc_page_url || fallback;
-    const viaProxy = pageUrl.startsWith("/vnc") || pageUrl.includes("/vnc/");
-    if (!viaProxy && !state.loginRequired) {
-      try {
-        const p = await api("/v1/console/vnc-embed-password");
-        embedPassword = p.password || "";
-      } catch {
-        embedPassword = "";
-      }
-    }
-    applyVncFrame(pageUrl, embedPassword);
+    applyVncFrame(data.vnc_page_url || fallback);
   }
 
   function escapeHtml(s) {
@@ -443,13 +422,8 @@
         vnc_page_url: $("vncPageUrl").value.trim(),
         default_webhook_url: $("defaultWebhook").value.trim(),
         default_priority: Number($("defaultPriority").value || 1),
-        clear_vnc_password: !!$("clearVncPassword")?.checked,
       };
-      const pwd = $("vncPassword")?.value;
-      if (pwd) body.vnc_password = pwd;
       await api("/v1/console/settings", { method: "PUT", body: JSON.stringify(body) });
-      if ($("vncPassword")) $("vncPassword").value = "";
-      if ($("clearVncPassword")) $("clearVncPassword").checked = false;
       await loadSettings();
       appendLog("控制台设置已保存");
       $("settingsDialog").close();

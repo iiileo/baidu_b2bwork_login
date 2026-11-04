@@ -21,7 +21,7 @@ SESSION_TTL_SECONDS = 7 * 24 * 3600
 
 def console_auth_enabled() -> bool:
     """控制台账号密码已配置时启用表单登录。"""
-    return bool(settings.basic_auth_user and settings.basic_auth_password)
+    return bool(settings.console_user and settings.console_password)
 
 
 # 兼容旧名
@@ -45,8 +45,8 @@ def _session_secret() -> str:
 def verify_console_credentials(username: str, password: str) -> bool:
     if not console_auth_enabled():
         return False
-    return _compare(username, settings.basic_auth_user) and _compare(
-        password, settings.basic_auth_password
+    return _compare(username, settings.console_user) and _compare(
+        password, settings.console_password
     )
 
 
@@ -103,7 +103,7 @@ def parse_session_token(token: str | None) -> dict[str, Any] | None:
     user = str(payload.get("u") or "")
     if not user or not console_auth_enabled():
         return None
-    if not _compare(user, settings.basic_auth_user):
+    if not _compare(user, settings.console_user):
         return None
     return payload
 

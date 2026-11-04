@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -10,14 +11,29 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        populate_by_name=True,
     )
 
     # Auth
     api_token: str = "dev-token-change-me"
     webhook_secret: str = "dev-webhook-secret-change-me"
     # 控制台表单登录账号（都配置后启用 Cookie 会话）
-    basic_auth_user: str = "admin"
-    basic_auth_password: str = "admin"
+    # 兼容旧名 BASIC_AUTH_USER / BASIC_AUTH_PASSWORD
+    console_user: str = Field(
+        default="admin",
+        validation_alias=AliasChoices(
+            "CONSOLE_USER", "console_user", "BASIC_AUTH_USER", "basic_auth_user"
+        ),
+    )
+    console_password: str = Field(
+        default="admin",
+        validation_alias=AliasChoices(
+            "CONSOLE_PASSWORD",
+            "console_password",
+            "BASIC_AUTH_PASSWORD",
+            "basic_auth_password",
+        ),
+    )
     # Cookie 签名密钥（留空则回退 webhook_secret / api_token）
     session_secret: str = ""
 
@@ -46,14 +62,15 @@ class Settings(BaseSettings):
     # Login page
     login_url: str = "http://b2bwork.baidu.com"
     login_total_timeout: int = 600
+    # 打开/填表/点击阶段看门狗（含启动浏览器）；超时走任务级重试
+    login_phase_timeout: int = 90
     login_status_max_rounds: int = 300
     login_unknown_limit: int = 30
 
-    # VNC / display
+    # VNC / display（鉴权走控制台登录 Cookie + /vnc 代理，无需 VNC 密码）
     enable_vnc: bool = False
     display: str = ":99"
-    vnc_password: str = ""
-    # 本地 websockify/noVNC 上游（仅容器内访问；对外走 /vnc 代理 + 登录 Cookie）
+    # 本地 websockify/noVNC 上游（仅容器内访问；对外走 /vnc 代理）
     vnc_upstream: str = "http://127.0.0.1:7900"
     # 浏览器访问 noVNC 的默认地址（同源代理，GUI 可覆盖）
     vnc_page_url: str = "/vnc/vnc.html?autoconnect=true&resize=scale&path=vnc/websockify"

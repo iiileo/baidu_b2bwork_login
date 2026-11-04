@@ -129,18 +129,7 @@
         VNC 页面 URL
         <input name="vnc_page_url" id="vncPageUrl" placeholder="/vnc/vnc.html?autoconnect=true&resize=scale&path=vnc/websockify" />
       </label>
-      <p class="hint">推荐同源代理 <code>/vnc/...</code>，由 Basic 账号鉴权，无需 VNC 密码。</p>
-      <div id="vncPasswordBlock" class="hidden">
-        <label>
-          兼容：直连 VNC 密码（仅未走 /vnc 代理时）
-          <input name="vnc_password" id="vncPassword" type="password" placeholder="留空则不修改" autocomplete="new-password" />
-        </label>
-        <label class="check">
-          <input type="checkbox" name="clear_vnc_password" id="clearVncPassword" />
-          清除已保存的 VNC 密码
-        </label>
-        <p id="vncPwdStatus" class="hint"></p>
-      </div>
+      <p class="hint">推荐同源代理 <code>/vnc/...</code>，由控制台登录 Cookie 鉴权。</p>
       <label>
         默认 Webhook
         <input name="default_webhook_url" id="defaultWebhook" />

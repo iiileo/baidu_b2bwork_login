@@ -5,19 +5,6 @@ export DISPLAY="${DISPLAY:-:99}"
 export DATA_DIR="${DATA_DIR:-/data}"
 mkdir -p "$DATA_DIR/challenges"
 
-# 优先使用 GUI 写入的密码文件
-if [[ -f "$DATA_DIR/vnc_password" ]]; then
-  VNC_PASSWORD="$(tr -d '\r\n' < "$DATA_DIR/vnc_password")"
-  export VNC_PASSWORD
-fi
-
-# 配置了控制台登录账号时，VNC 本机无密码，对外由 /vnc 代理 + Cookie 鉴权
-if [[ -n "${BASIC_AUTH_USER:-}" && -n "${BASIC_AUTH_PASSWORD:-}" ]]; then
-  VNC_PASSWORD=""
-  export VNC_PASSWORD
-  echo "[entrypoint] Console login enabled → x11vnc without password (gate via /vnc + cookie)"
-fi
-
 cleanup() {
   echo "[entrypoint] shutting down..."
   kill "$WORKER_PID" "$API_PID" 2>/dev/null || true
@@ -35,19 +22,9 @@ start_vnc() {
   VNC_PIDS="$!"
   sleep 1
 
-  VNC_PASS_ARGS=()
-  if [[ -n "${VNC_PASSWORD:-}" ]]; then
-    mkdir -p /tmp/vnc
-    x11vnc -storepasswd "$VNC_PASSWORD" /tmp/vnc/passwd >/dev/null
-    VNC_PASS_ARGS=(-rfbauth /tmp/vnc/passwd)
-    echo "[entrypoint] x11vnc password enabled"
-  else
-    VNC_PASS_ARGS=(-nopw)
-    echo "[entrypoint] x11vnc without password"
-  fi
-
-  echo "[entrypoint] starting x11vnc :5900"
-  x11vnc -display "$DISPLAY" -forever -shared -rfbport 5900 "${VNC_PASS_ARGS[@]}" >/tmp/x11vnc.log 2>&1 &
+  # x11vnc 仅容器内访问；对外由 /vnc 代理 + 控制台登录 Cookie 鉴权
+  echo "[entrypoint] starting x11vnc :5900 (nopw, gated via /vnc)"
+  x11vnc -display "$DISPLAY" -forever -shared -rfbport 5900 -nopw >/tmp/x11vnc.log 2>&1 &
   VNC_PIDS="$VNC_PIDS $!"
 
   # 自定义 noVNC 落地页（可被 /data/novnc_index.html 覆盖）

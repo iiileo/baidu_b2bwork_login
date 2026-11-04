@@ -318,6 +318,7 @@ class SessionStore:
         clear_challenge: bool = False,
         clear_human_input: bool = False,
     ) -> SessionRecord | None:
+        """仅非终态且未取消时可改状态，防止取消后被 waiting/running「复活」。"""
         now = time.time()
         with self._connect() as conn:
             fields = ["status=?", "updated_at=?"]
@@ -330,11 +331,18 @@ class SessionStore:
             if clear_human_input:
                 fields.append("human_input_json=NULL")
             params.append(session_id)
-            conn.execute(
-                f"UPDATE sessions SET {', '.join(fields)} WHERE id=?",
+            cur = conn.execute(
+                f"""
+                UPDATE sessions SET {', '.join(fields)}
+                WHERE id=?
+                  AND status NOT IN ('succeeded','failed','cancelled')
+                  AND cancel_requested = 0
+                """,
                 params,
             )
             conn.commit()
+            if cur.rowcount == 0:
+                return None
         return self.get(session_id)
 
     def mark_running(self, session_id: str) -> None:
@@ -392,7 +400,7 @@ class SessionStore:
                     UPDATE sessions
                     SET status='cancelled', cancel_requested=1, password=NULL,
                         error_json=?, finished_at=?, updated_at=?
-                    WHERE id=?
+                    WHERE id=? AND status='queued'
                     """,
                     (
                         json.dumps(
@@ -407,7 +415,10 @@ class SessionStore:
             elif rec.status not in TERMINAL:
                 # 标记取消；worker 轮询到后结束。status 保持原值以便 UI 显示「取消中」
                 conn.execute(
-                    "UPDATE sessions SET cancel_requested=1, updated_at=? WHERE id=?",
+                    """
+                    UPDATE sessions SET cancel_requested=1, updated_at=?
+                    WHERE id=? AND status NOT IN ('succeeded','failed','cancelled')
+                    """,
                     (now, session_id),
                 )
             conn.commit()
@@ -469,26 +480,52 @@ class SessionStore:
         result: dict[str, Any] | None = None,
         error: dict[str, Any] | None = None,
     ) -> SessionRecord | None:
+        """写入终态；已是终态则不覆盖。成功/失败在已请求取消时也不写入。"""
+        if status not in TERMINAL:
+            raise ValueError(f"finish status must be terminal, got {status!r}")
         now = time.time()
         with self._connect() as conn:
-            conn.execute(
-                """
-                UPDATE sessions
-                SET status=?, result_json=?, error_json=?, password=NULL,
-                    challenge_json=NULL, human_input_json=NULL,
-                    finished_at=?, updated_at=?, claimed_at=NULL
-                WHERE id=?
-                """,
-                (
+            # 取消可以盖住进行中；succeeded/failed 不能盖住已取消或取消中
+            if status == "cancelled":
+                where = "id=? AND status NOT IN ('succeeded','failed','cancelled')"
+                params: list[Any] = [
                     status,
                     json.dumps(result, ensure_ascii=False) if result else None,
                     json.dumps(error, ensure_ascii=False) if error else None,
                     now,
                     now,
                     session_id,
-                ),
+                ]
+            else:
+                where = (
+                    "id=? AND status NOT IN ('succeeded','failed','cancelled') "
+                    "AND cancel_requested = 0"
+                )
+                params = [
+                    status,
+                    json.dumps(result, ensure_ascii=False) if result else None,
+                    json.dumps(error, ensure_ascii=False) if error else None,
+                    now,
+                    now,
+                    session_id,
+                ]
+            cur = conn.execute(
+                f"""
+                UPDATE sessions
+                SET status=?, result_json=?, error_json=?, password=NULL,
+                    challenge_json=NULL, human_input_json=NULL,
+                    finished_at=?, updated_at=?, claimed_at=NULL
+                WHERE {where}
+                """,
+                params,
             )
             conn.commit()
+            if cur.rowcount == 0:
+                # 幂等：目标终态已是该 status 时返回现记录，避免误报失败
+                rec = self.get(session_id)
+                if rec and rec.status == status:
+                    return rec
+                return None
         return self.get(session_id)
 
     def release_for_retry(self, session_id: str, delay_seconds: float) -> bool:
@@ -505,7 +542,7 @@ class SessionStore:
             return False
         now = time.time()
         with self._connect() as conn:
-            conn.execute(
+            cur = conn.execute(
                 """
                 UPDATE sessions
                 SET status='queued', claimed_at=NULL, next_run_at=?,
@@ -516,7 +553,7 @@ class SessionStore:
                 (now + max(0.0, delay_seconds), now, session_id),
             )
             conn.commit()
-        return True
+            return cur.rowcount > 0
 
     def is_cancel_requested(self, session_id: str) -> bool:
         rec = self.get(session_id)

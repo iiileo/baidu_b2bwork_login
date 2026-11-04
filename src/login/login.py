@@ -199,8 +199,8 @@ def login(
             },
         )
 
-    # 打开/填表/点击阶段硬限 20s（含启动浏览器；假死靠看门狗 SIGKILL）
-    phase_deadline_holder = [time.time() + 20]
+    # 打开/填表/点击阶段硬限（含启动浏览器；假死靠看门狗 SIGKILL，超时走任务重试）
+    phase_deadline_holder = [time.time() + max(20, settings.login_phase_timeout)]
     progress = _StepProgress()
     try:
         _raise_if_cancelled(cancel_check)
@@ -239,9 +239,10 @@ def login(
     except LoginFinished:
         raise
     except BrowserUnavailableError:
+        # 阶段看门狗超时：可恢复（冷启动慢等），交给 worker _fail_or_retry
         if watchdog and watchdog.timed_out:
-            raise LoginFinished(
-                error_code="timeout", error_message="登录操作超时（浏览器无响应）"
+            raise BrowserUnavailableError(
+                "登录操作超时（浏览器无响应）"
             ) from None
         if watchdog and watchdog.forced:
             raise LoginFinished(
@@ -250,8 +251,8 @@ def login(
         raise
     except PlaywrightError as exc:
         if watchdog and watchdog.timed_out:
-            raise LoginFinished(
-                error_code="timeout", error_message="登录操作超时（浏览器无响应）"
+            raise BrowserUnavailableError(
+                "登录操作超时（浏览器无响应）"
             ) from exc
         if watchdog and watchdog.forced:
             raise LoginFinished(

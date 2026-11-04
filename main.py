@@ -23,7 +23,7 @@ from src.auth import (
     websocket_authorized,
 )
 from src.config import ensure_data_dir, settings
-from src.gui_settings import load_gui_settings, read_vnc_password, save_gui_settings
+from src.gui_settings import load_gui_settings, save_gui_settings
 from src.logbus import log_bus, relay_worker_logs, setup_logging
 from src.schemas import (
     CaptchaSubmitRequest,
@@ -40,8 +40,6 @@ WEB_DIR = Path(__file__).resolve().parent / "web"
 
 class ConsoleSettingsUpdate(BaseModel):
     vnc_page_url: str | None = None
-    vnc_password: str | None = None
-    clear_vnc_password: bool = False
     default_webhook_url: str | None = None
     default_priority: int | None = Field(default=None, ge=1)
 
@@ -216,19 +214,11 @@ def get_console_settings() -> dict[str, Any]:
 def put_console_settings(body: ConsoleSettingsUpdate) -> dict[str, Any]:
     updated = save_gui_settings(
         vnc_page_url=body.vnc_page_url,
-        vnc_password=body.vnc_password,
-        clear_vnc_password=body.clear_vnc_password,
         default_webhook_url=body.default_webhook_url,
         default_priority=body.default_priority,
     )
     log_bus.emit("控制台设置已更新")
     return updated
-
-
-@app.get("/v1/console/vnc-embed-password", dependencies=[Depends(require_api_auth)])
-def vnc_embed_password() -> dict[str, str]:
-    """兼容旧逻辑；推荐走 /vnc 同源代理 + 控制台登录 Cookie。"""
-    return {"password": read_vnc_password()}
 
 
 @app.post(
