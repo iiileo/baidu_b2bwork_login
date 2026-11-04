@@ -68,9 +68,21 @@ docker compose up --build
 - 数据卷：`/data`
 - `shm_size: 2gb`
 
-### GitHub Actions → GHCR（`ghcr.io`）
+### GitHub Actions → GHCR + 自定义 ACR
 
-打 `v*` tag 时自动构建并推送到 **GitHub Container Registry**（`linux/amd64` + `linux/arm64`），同时打上版本 tag（如 `1.0.0` / `v1.0.0`）与 `latest`。使用内置 `GITHUB_TOKEN`，无需 Docker Hub Secret。
+打 `v*` tag 时自动构建（`linux/amd64` + `linux/arm64`），推送 `latest` 与版本 tag（如 `1.0.0` / `v1.0.0`）：
+
+1. **GHCR**（默认）：`ghcr.io/<owner>/<repo>`，用内置 `GITHUB_TOKEN`
+2. **自定义 ACR**（可选）：配置仓库 Secrets 后同时推送
+
+| Secret | 说明 | 示例 |
+|--------|------|------|
+| `ACR_REGISTRY` | 镜像仓库地址 | `registry.cn-hangzhou.aliyuncs.com` |
+| `ACR_REPOSITORY` | 命名空间/仓库名（不含 registry） | `my-ns/b2bwork-login` |
+| `ACR_USERNAME` | 登录用户名 | 阿里云 RAM / 固定账号 |
+| `ACR_PASSWORD` | 登录密码或临时密码 | |
+
+未配置 `ACR_*` 时只推 GHCR。
 
 #### 拉取
 
