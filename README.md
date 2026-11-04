@@ -41,17 +41,19 @@ uv run python main.py
 
 ## API 摘要
 
-完整说明见 [`/docs.html`](http://127.0.0.1:8056/docs.html)。
+完整说明见 [`/docs.html`](http://127.0.0.1:8056/docs.html)。重复账号和幂等重试规则详见 [`docs/duplicate-sessions.md`](docs/duplicate-sessions.md)。
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/v1/sessions` | 创建登录会话 `202`；可选 `silent=true` |
+| POST | `/v1/sessions` | 创建登录会话 `202`；可选 `silent=true`、`Idempotency-Key` |
 | GET | `/v1/sessions/{id}` | 查询状态 / challenge / result |
 | POST | `/v1/sessions/{id}/captcha` | 人工验证码 |
 | DELETE | `/v1/sessions/{id}` | 取消 |
 | GET | `/v1/queue` | 队列统计 |
 | GET/PUT | `/v1/console/settings` | GUI 设置 |
 | WS | `/v1/logs` | 日志 |
+
+相同 `username` 有未完成会话时，新请求返回 `409 active_session_exists`，不会取消旧会话或进入队列。带相同 `Idempotency-Key` 的同一请求重试会复用原会话；详见幂等说明。
 
 ## Docker（API + Worker + noVNC）
 
