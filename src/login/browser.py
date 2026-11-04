@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import signal
 import threading
@@ -11,6 +12,14 @@ from playwright.sync_api import Browser, BrowserContext, Page, Playwright, sync_
 from src.config import settings
 from src.logbus import log_bus
 from src.login.exceptions import BrowserUnavailableError
+
+
+def _clear_asyncio_running_loop() -> None:
+    """后台 stop / 强杀后可能残留 running loop，导致后续 sync_playwright().start() 误报。"""
+    try:
+        asyncio._set_running_loop(None)  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _pid_of_browser(browser: Browser | None) -> int | None:
@@ -114,28 +123,6 @@ class BrowserSession:
         self._lock = threading.Lock()
         self._force_closed = False
         self._browser_pid: int | None = None
-        self._stop_thread: threading.Thread | None = None
-
-    def _join_pending_stop(self, timeout: float = 5.0) -> None:
-        t = self._stop_thread
-        if t is not None and t.is_alive():
-            log_bus.emit(f"等待上次 Playwright.stop 结束 timeout={timeout}s")
-            t.join(timeout=timeout)
-        self._stop_thread = None
-
-    def _stop_playwright_async(self, pw: Playwright, *, join_timeout: float = 2.0) -> None:
-        """在后台线程 stop；同一进程内绝不能重叠两次 sync_playwright().start()。"""
-
-        def _stop() -> None:
-            try:
-                pw.stop()
-            except Exception:  # noqa: BLE001
-                pass
-
-        t = threading.Thread(target=_stop, name="pw-stop", daemon=True)
-        self._stop_thread = t
-        t.start()
-        t.join(timeout=join_timeout)
 
     def _discard_browser_refs(self) -> None:
         with self._lock:
@@ -145,7 +132,7 @@ class BrowserSession:
             self._browser_pid = None
 
     def _close_browser_only(self) -> None:
-        """只关 browser/context/page，保留 Playwright 驱动（避免二次 start 报假 asyncio 错）。"""
+        """只关 browser/context/page，保留 Playwright 驱动。"""
         pid = self._browser_pid
         page, context, browser = self.page, self.context, self.browser
         self._discard_browser_refs()
@@ -174,8 +161,17 @@ class BrowserSession:
         else:
             _kill_pid(pid)
 
+    def _stop_playwright(self, pw: Playwright) -> None:
+        """必须在创建驱动的同一线程调用 stop；禁止后台线程 stop（会弄脏 asyncio）。"""
+        try:
+            pw.stop()
+        except Exception as exc:  # noqa: BLE001
+            log_bus.emit(f"Playwright.stop 忽略: {exc}")
+        finally:
+            _clear_asyncio_running_loop()
+
     def _ensure_playwright(self) -> Playwright:
-        self._join_pending_stop()
+        _clear_asyncio_running_loop()
         if self._pw is not None:
             return self._pw
         log_bus.emit("浏览器启动 · sync_playwright().start()")
@@ -183,14 +179,20 @@ class BrowserSession:
         return self._pw
 
     def _drop_playwright(self) -> None:
-        """彻底丢掉驱动（仅在驱动已坏、或进程退出时）。必须先停干净再允许下次 start。"""
-        self._join_pending_stop()
+        """彻底丢掉驱动（仅在驱动已坏、或进程退出时）。"""
         pw = self._pw
         self._pw = None
         if pw is not None:
             log_bus.emit("浏览器启动 · 停止旧 Playwright 驱动")
-            self._stop_playwright_async(pw, join_timeout=5.0)
-            self._join_pending_stop(timeout=5.0)
+            self._stop_playwright(pw)
+        else:
+            _clear_asyncio_running_loop()
+
+    def _abandon_playwright(self) -> None:
+        """驱动状态已坏时丢弃引用并清理 loop，避免后台 stop 二次污染。"""
+        self._pw = None
+        _clear_asyncio_running_loop()
+        _kill_chromium_descendants(os.getpid())
 
     def start(self) -> Page:
         last_err: Exception | None = None
@@ -243,22 +245,21 @@ class BrowserSession:
                 return self.page
             except Exception as exc:  # noqa: BLE001
                 last_err = exc
-                msg = str(exc)
+                msg = str(exc).lower()
                 log_bus.emit(f"创建浏览器会话失败（第 {i} 次）: {exc}")
-                # 这条文案常被二次 start 触发，并不真是跑在 asyncio 里
-                if "asyncio loop" in msg.lower() or "async api" in msg.lower():
-                    log_bus.emit(
-                        "检测到 Playwright 驱动未停干净（误报 asyncio）；"
-                        "将停驱动后重试"
-                    )
-                    self._force_closed = True
-                    self.force_close(keep_driver=False)
+                self._force_closed = True
+                if "asyncio loop" in msg or "async api" in msg:
+                    # 低 CPU / 强杀后常见：先清 loop 再重建，勿在后台线程 stop
+                    log_bus.emit("清理 asyncio running loop 并重建 Playwright 驱动")
+                    self._discard_browser_refs()
+                    _kill_chromium_descendants(os.getpid())
+                    self._abandon_playwright()
                 else:
-                    self._force_closed = True
                     self.force_close(keep_driver=True)
                 self._force_closed = False
                 if i < settings.playwright_create_retry:
-                    time.sleep(settings.login_retry_delay)
+                    # 低 CPU 下多等一会再拉起
+                    time.sleep(max(float(settings.login_retry_delay), 3.0) * i)
         raise BrowserUnavailableError(f"无法创建浏览器会话: {last_err}")
 
     def new_page(self) -> Page:
@@ -297,9 +298,9 @@ class BrowserSession:
     def force_close(self, *, keep_driver: bool = True) -> None:
         """打断卡住的 Playwright：先 SIGKILL 浏览器。
 
-        keep_driver=True（默认）：保留 sync Playwright 驱动，避免二次 start 触发
-        「Sync API inside the asyncio loop」误报。
-        keep_driver=False：驱动已坏时才停干净，供重试重建。
+        keep_driver=True（默认）：保留 sync 驱动。
+        keep_driver=False：丢弃驱动引用并清理 asyncio（由调用方线程再 _drop/_ensure）。
+        注意：看门狗线程只应 keep_driver=True，禁止在异线程 pw.stop()。
         """
         self._force_closed = True
         pid = self._browser_pid
@@ -308,7 +309,6 @@ class BrowserSession:
             self.page = None
             self.context = None
             self.browser = None
-            pw = self._pw
             if not keep_driver:
                 self._pw = None
         log_bus.emit(
@@ -316,8 +316,8 @@ class BrowserSession:
         )
         _kill_pid(pid)
         _kill_chromium_descendants(os.getpid())
-        if not keep_driver and pw is not None:
-            self._stop_playwright_async(pw, join_timeout=3.0)
+        if not keep_driver:
+            _clear_asyncio_running_loop()
 
     def close(self) -> None:
         """完整关闭（worker 退出 / 重置会话时）：关 browser 并 stop 驱动。"""
