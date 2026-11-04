@@ -25,6 +25,7 @@ class CreateSessionResponse(BaseModel):
     id: str
     status: str
     queue_position: int
+    duplicate: bool = False
 
 
 class CaptchaSubmitRequest(BaseModel):

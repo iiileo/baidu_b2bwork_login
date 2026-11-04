@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator
 
-from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -165,21 +165,37 @@ def vnc_embed_password() -> dict[str, str]:
     status_code=202,
     dependencies=[Depends(require_api_auth)],
 )
-def create_session(body: CreateSessionRequest) -> CreateSessionResponse:
+def create_session(
+    body: CreateSessionRequest,
+    idempotency_key: str | None = Header(
+        default=None, alias="Idempotency-Key", min_length=1, max_length=255
+    ),
+) -> CreateSessionResponse:
     store = _store()
-    rec, position = store.create(
+    rec, position, duplicate = store.create(
         username=body.username,
         password=body.password,
         webhook_url=body.webhook_url,
         priority=body.priority,
         client_ref=body.client_ref,
         silent=body.silent,
+        idempotency_key=idempotency_key,
     )
-    log_bus.emit(
-        f"会话已入队 id={rec.id} username={rec.username} "
-        f"priority={rec.priority} silent={rec.silent} queue_position={position}"
+    if duplicate:
+        log_bus.emit(
+            f"幂等重试复用会话 id={rec.id} username={rec.username} status={rec.status}"
+        )
+    else:
+        log_bus.emit(
+            f"会话已入队 id={rec.id} username={rec.username} "
+            f"priority={rec.priority} silent={rec.silent} queue_position={position}"
+        )
+    return CreateSessionResponse(
+        id=rec.id,
+        status=rec.status,
+        queue_position=position,
+        duplicate=duplicate,
     )
-    return CreateSessionResponse(id=rec.id, status=rec.status, queue_position=position)
 
 
 @app.get(
