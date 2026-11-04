@@ -174,30 +174,35 @@ def login(
         store.mark_running(session_id)
 
     def set_waiting(status: str, challenge: dict[str, Any]) -> None:
+        # 先落库赋值，webhook 后台发，避免解析后被回调拖慢
         store.set_status(session_id, status, challenge=challenge, clear_human_input=True)
         event = (
             "session.waiting_captcha"
             if status == "waiting_captcha"
             else "session.waiting_security"
         )
-        send_webhook(
-            webhook_url,
-            event,
-            {
-                "session_id": session_id,
-                "status": status,
-                "username": username,
-                "client_ref": client_ref,
-                "challenge": {
-                    "type": challenge.get("type"),
-                    "qr_content": challenge.get("qr_content"),
-                    "expires_at": challenge.get("expires_at"),
-                    # 仅图片验证码提供图；安全扫码以 qr_content 为准
-                    "image_available": challenge.get("type") == "captcha_image"
-                    and bool(challenge.get("image_path")),
-                },
+        payload = {
+            "session_id": session_id,
+            "status": status,
+            "username": username,
+            "client_ref": client_ref,
+            "challenge": {
+                "type": challenge.get("type"),
+                "qr_content": challenge.get("qr_content"),
+                "expires_at": challenge.get("expires_at"),
+                # 仅图片验证码提供图；安全扫码以 qr_content 为准
+                "image_available": challenge.get("type") == "captcha_image"
+                and bool(challenge.get("image_path")),
             },
-        )
+        }
+
+        def _emit() -> None:
+            try:
+                send_webhook(webhook_url, event, payload)
+            except Exception as exc:  # noqa: BLE001
+                log_bus.emit(f"waiting webhook 后台发送失败: {exc}")
+
+        threading.Thread(target=_emit, name="waiting-webhook", daemon=True).start()
 
     # 打开/填表/点击阶段硬限（含启动浏览器；假死靠看门狗 SIGKILL，超时走任务重试）
     phase_deadline_holder = [time.time() + max(20, settings.login_phase_timeout)]
@@ -745,38 +750,38 @@ def _screenshot_qr_element(page: Page) -> bytes | None:
     return None
 
 
-def _capture_security_challenge(page: Page, session_id: str) -> dict[str, Any]:
+def _capture_security_challenge(page: Page, _session_id: str = "") -> dict[str, Any]:
+    """解析安全扫码内容；不落盘图片，只返回 qr_content。"""
     t0 = time.time()
     qr_content = _qr_content_from_dom(page)
-    png = _screenshot_qr_element(page)
-    if png is None:
-        # 最后兜底：只截视口中心区域，不扫整页
-        try:
-            vp = page.viewport_size or {"width": 1280, "height": 720}
-            cw = min(420, int(vp["width"]))
-            ch = min(420, int(vp["height"]))
-            clip = {
-                "x": max(0, (vp["width"] - cw) / 2),
-                "y": max(0, (vp["height"] - ch) / 2 - 40),
-                "width": cw,
-                "height": ch,
-            }
-            png = page.screenshot(type="png", clip=clip, timeout=3_000)
-        except Exception:  # noqa: BLE001
-            png = page.screenshot(type="png", full_page=False, timeout=5_000)
-
-    path = _save_challenge_image(session_id, png or b"")
-    if not qr_content and png:
-        qr_content = decode_qr_from_bytes(png)
+    if not qr_content:
+        png = _screenshot_qr_element(page)
+        if png is None:
+            # 最后兜底：只截视口中心区域，内存解码，不写文件
+            try:
+                vp = page.viewport_size or {"width": 1280, "height": 720}
+                cw = min(420, int(vp["width"]))
+                ch = min(420, int(vp["height"]))
+                clip = {
+                    "x": max(0, (vp["width"] - cw) / 2),
+                    "y": max(0, (vp["height"] - ch) / 2 - 40),
+                    "width": cw,
+                    "height": ch,
+                }
+                png = page.screenshot(type="png", clip=clip, timeout=3_000)
+            except Exception:  # noqa: BLE001
+                png = page.screenshot(type="png", full_page=False, timeout=5_000)
+        if png:
+            qr_content = decode_qr_from_bytes(png)
     expires = time.time() + settings.security_wait_seconds
     log_bus.emit(
-        f"安全验证二维码已保存 decoded={'yes' if qr_content else 'no'} "
-        f"path={path} cost={(time.time()-t0)*1000:.0f}ms"
+        f"安全验证二维码已解析 decoded={'yes' if qr_content else 'no'} "
+        f"cost={(time.time()-t0)*1000:.0f}ms"
     )
     return {
         "type": "security_qr",
         "qr_content": qr_content,
-        "image_path": str(path),
+        "image_path": None,
         "expires_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(expires)),
     }
 
@@ -832,15 +837,45 @@ def _wait_security_scan(
     deadline_holder: list[float],
     phase_deadline_holder: list[float] | None = None,
 ) -> None:
-    challenge = _capture_security_challenge(page, session_id)
-    set_waiting("waiting_security", challenge)
-    log_bus.emit("步骤4 等待安全扫码")
     wait_deadline = time.time() + settings.security_wait_seconds
     deadline_holder[0] = max(deadline_holder[0], wait_deadline)
     if phase_deadline_holder is not None:
         phase_deadline_holder[0] = max(phase_deadline_holder[0], wait_deadline + 15)
-    last_refresh = 0.0
 
+    # 页面上二维码可能晚于跳转出现：高频重试，一解出立刻落库
+    challenge: dict[str, Any] | None = None
+    qr_ready = False
+    last_refresh = 0.0
+    last_qr = None
+    while time.time() < wait_deadline and not qr_ready:
+        _raise_if_cancelled(cancel_check)
+        _ensure_alive(page)
+        url = page.url or ""
+        if "aq.baidu.com" not in url:
+            log_bus.emit("步骤4 已离开安全验证页（解析前）")
+            set_running()
+            return
+        try:
+            challenge = _capture_security_challenge(page, session_id)
+            set_waiting("waiting_security", challenge)
+            last_refresh = time.time()
+            last_qr = challenge.get("qr_content")
+            if last_qr:
+                qr_ready = True
+                log_bus.emit("步骤4 二维码已实时解析并写入")
+                break
+            log_bus.emit("步骤4 安全页暂无二维码，继续快速重试")
+        except Exception as exc:  # noqa: BLE001
+            log_bus.emit(f"二维码解析重试: {exc}")
+        _interruptible_sleep(0.35, cancel_check)
+
+    if not qr_ready:
+        raise LoginFinished(
+            error_code="security_qr_missing",
+            error_message="安全验证页未解析到二维码内容",
+        )
+
+    log_bus.emit("步骤4 等待用户扫码")
     while time.time() < wait_deadline:
         _raise_if_cancelled(cancel_check)
         _ensure_alive(page)
@@ -849,15 +884,19 @@ def _wait_security_scan(
             log_bus.emit("步骤4 已离开安全验证页")
             set_running()
             return
-        # 周期性刷新挑战图（二维码可能过期）
-        if time.time() - last_refresh > 30:
+        # 二维码可能过期：有内容后按较长间隔刷新
+        if time.time() - last_refresh > 25:
             try:
                 challenge = _capture_security_challenge(page, session_id)
-                set_waiting("waiting_security", challenge)
+                new_qr = challenge.get("qr_content")
+                if new_qr and new_qr != last_qr:
+                    set_waiting("waiting_security", challenge)
+                    last_qr = new_qr
+                    log_bus.emit("步骤4 二维码内容已更新")
                 last_refresh = time.time()
             except Exception as exc:  # noqa: BLE001
                 log_bus.emit(f"刷新二维码失败: {exc}")
-        _interruptible_sleep(1.5, cancel_check)
+        _interruptible_sleep(0.8, cancel_check)
     raise LoginFinished(
         error_code="security_timeout",
         error_message="安全验证扫码超时",
@@ -903,7 +942,6 @@ def _poll_status(
             progress.set("4.状态轮询", f"round={round_i}")
 
         _ensure_alive(page)
-        _interruptible_sleep(0.6, cancel_check)
 
         if _page_looks_502(page):
             gateway502 += 1
@@ -915,6 +953,27 @@ def _poll_status(
             continue
 
         url = page.url or ""
+        # 安全页优先：尽早进入二维码实时解析，不先 sleep
+        if "aq.baidu.com" in url:
+            _raise_if_silent_human_required(
+                silent,
+                code="security_required",
+                message="静默模式：需要安全扫码，已跳过",
+            )
+            log_bus.emit("步骤4 判定：安全验证页，立即解析二维码")
+            _wait_security_scan(
+                page,
+                session_id=session_id,
+                cancel_check=cancel_check,
+                set_waiting=set_waiting,
+                set_running=set_running,
+                deadline_holder=deadline_holder,
+                phase_deadline_holder=phase_deadline_holder,
+            )
+            unknown = 0
+            login_stuck = 0
+            continue
+
         err_text = _error_node_text(page)
         has_captcha = _captcha_visible(page)
         has_slider = _slider_visible(page)
@@ -972,26 +1031,6 @@ def _poll_status(
             login_stuck = 0
             continue
 
-        if "aq.baidu.com" in url:
-            _raise_if_silent_human_required(
-                silent,
-                code="security_required",
-                message="静默模式：需要安全扫码，已跳过",
-            )
-            log_bus.emit("步骤4 判定：安全验证页，进入扫码等待")
-            _wait_security_scan(
-                page,
-                session_id=session_id,
-                cancel_check=cancel_check,
-                set_waiting=set_waiting,
-                set_running=set_running,
-                deadline_holder=deadline_holder,
-                phase_deadline_holder=phase_deadline_holder,
-            )
-            unknown = 0
-            login_stuck = 0
-            continue
-
         if has_slider:
             log_bus.emit("步骤6 登录失败 code=slider_required")
             raise LoginFinished(
@@ -1015,6 +1054,7 @@ def _poll_status(
                     error_code="login_page_stuck",
                     error_message="卡在登录页无响应",
                 )
+            _interruptible_sleep(0.4, cancel_check)
             continue
 
         login_stuck = 0
@@ -1026,6 +1066,7 @@ def _poll_status(
                 error_code="unknown_state",
                 error_message="登录状态未知",
             )
+        _interruptible_sleep(0.4, cancel_check)
 
     log_bus.emit("步骤6 登录失败 code=timeout")
     raise LoginFinished(error_code="timeout", error_message="登录超时")
