@@ -74,6 +74,8 @@ class Settings(BaseSettings):
     vnc_upstream: str = "http://127.0.0.1:7900"
     # 浏览器访问 noVNC 的默认地址（同源代理，GUI 可覆盖）
     vnc_page_url: str = "/vnc/vnc.html?autoconnect=true&resize=scale&path=vnc/websockify"
+    # 浏览器语言（VNC 下窗口默认铺满 1280x800）
+    browser_locale: str = "zh-CN"
 
     # API
     api_host: str = "0.0.0.0"

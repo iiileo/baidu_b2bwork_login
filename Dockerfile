@@ -12,8 +12,9 @@ ARG USE_CHINA_MIRROR=1
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     TZ=Asia/Shanghai \
-    LANG=C.UTF-8 \
-    LC_ALL=C.UTF-8 \
+    LANG=zh_CN.UTF-8 \
+    LANGUAGE=zh_CN:zh \
+    LC_ALL=zh_CN.UTF-8 \
     DATA_DIR=/data \
     QUEUE_DB_PATH=/data/queue.db \
     ENABLE_VNC=true \
@@ -53,7 +54,11 @@ RUN set -eux; \
       websockify \
       fonts-noto-cjk \
       libzbar0 \
+      iproute2 \
+      locales \
       tzdata \
+    && sed -i '/zh_CN.UTF-8/s/^# //g' /etc/locale.gen \
+    && locale-gen zh_CN.UTF-8 \
     && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
     && echo $TZ > /etc/timezone \
     && rm -rf /var/lib/apt/lists/* \

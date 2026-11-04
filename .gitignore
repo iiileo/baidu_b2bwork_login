@@ -14,3 +14,7 @@ wheels/
 data/
 *_captcha.png
 .DS_Store
+users.txt
+users.csv
+accounts.csv
+*.credentials.csv

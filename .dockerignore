@@ -14,5 +14,9 @@ data
 .env
 .env.*
 !.env.example
+users.txt
+users.csv
+accounts.csv
+*.credentials.csv
 agent-transcripts
 **/.DS_Store

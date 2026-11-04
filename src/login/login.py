@@ -475,13 +475,16 @@ def _fill_credentials(
     progress.set("2.填写账号", username)
     account = page.locator("#uc-common-account")
     account.click(timeout=3_000)
-    account.fill(username, timeout=3_000)
+    account.fill("", timeout=3_000)
+    # 逐字输入，模拟人工（避免一次性 fill 被风控）
+    account.press_sequentially(username, delay=50)
     log_bus.emit("步骤2 账号已填入")
     _raise_if_cancelled(cancel_check)
     progress.set("2.填写密码")
     pwd = page.locator("#ucsl-password-edit")
     pwd.click(timeout=3_000)
-    pwd.fill(password, timeout=3_000)
+    pwd.fill("", timeout=3_000)
+    pwd.press_sequentially(password, delay=50)
     log_bus.emit("步骤2 密码已填入")
     _interruptible_sleep(0.15, cancel_check)
 

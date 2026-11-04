@@ -16,9 +16,17 @@ services:
       QUEUE_DB_PATH: /data/queue.db
       DATA_DIR: /data
       TZ: Asia/Shanghai
+      # 慢网模拟（留空 / off 关闭）；需 cap_add NET_ADMIN
+      NET_RATE: ${NET_RATE:-2mbit}
+      NET_DELAY: ${NET_DELAY:-100ms}
+      NET_LOSS: ${NET_LOSS:-}
     volumes:
       - b2bwork_data:/data
-    shm_size: "2gb"
+    shm_size: "1gb"
+    # CPU 限制（模拟慢机器）；改 CPU_LIMIT= 提高核数
+    cpus: ${CPU_LIMIT:-1.0}
+    cap_add:
+      - NET_ADMIN
     restart: unless-stopped
 
 volumes:

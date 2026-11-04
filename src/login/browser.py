@@ -75,6 +75,36 @@ _LAUNCH_ARGS = [
 ]
 
 
+# 与 entrypoint Xvfb 默认分辨率一致；VNC 下浏览器窗口默认铺满
+_VNC_SCREEN = (1280, 800)
+
+
+def _launch_args() -> list[str]:
+    args = list(_LAUNCH_ARGS)
+    locale = (settings.browser_locale or "zh-CN").strip() or "zh-CN"
+    args.append(f"--lang={locale}")
+    if settings.enable_vnc:
+        w, h = _VNC_SCREEN
+        args.append(f"--window-size={w},{h}")
+        args.append("--window-position=0,0")
+        args.append("--force-device-scale-factor=1")
+    return args
+
+
+def _context_kwargs() -> dict[str, Any]:
+    locale = (settings.browser_locale or "zh-CN").strip() or "zh-CN"
+    w, h = _VNC_SCREEN if settings.enable_vnc else (1280, 800)
+    return {
+        "locale": locale,
+        "timezone_id": "Asia/Shanghai",
+        "extra_http_headers": {
+            "Accept-Language": f"{locale},{locale.split('-')[0]};q=0.9,en;q=0.8",
+        },
+        "device_scale_factor": 1.0,
+        "viewport": {"width": w, "height": h},
+    }
+
+
 class BrowserSession:
     def __init__(self) -> None:
         self._pw: Playwright | None = None
@@ -182,17 +212,24 @@ class BrowserSession:
                 pw = self._ensure_playwright()
 
                 launcher = getattr(pw, settings.playwright_browser)
-                log_bus.emit(f"浏览器启动 · launch({settings.playwright_browser})")
+                log_bus.emit(
+                    f"浏览器启动 · launch({settings.playwright_browser}) "
+                    f"locale={settings.browser_locale} "
+                    f"screen={_VNC_SCREEN[0]}x{_VNC_SCREEN[1]}"
+                )
                 self.browser = launcher.launch(
                     headless=headless,
-                    args=list(_LAUNCH_ARGS),
+                    args=_launch_args(),
+                    env={
+                        **os.environ,
+                        "LANG": "zh_CN.UTF-8",
+                        "LANGUAGE": "zh_CN:zh",
+                        "LC_ALL": "zh_CN.UTF-8",
+                    },
                 )
                 self._browser_pid = _pid_of_browser(self.browser)
                 log_bus.emit(f"浏览器启动 · new_context pid={self._browser_pid}")
-                self.context = self.browser.new_context(
-                    locale="zh-CN",
-                    viewport={"width": 1280, "height": 720},
-                )
+                self.context = self.browser.new_context(**_context_kwargs())
                 self.context.set_default_timeout(10_000)
                 self.context.set_default_navigation_timeout(8_000)
                 log_bus.emit("浏览器启动 · new_page")
@@ -247,10 +284,7 @@ class BrowserSession:
                     pass
                 self.context = None
             log_bus.emit("浏览器复用 · new_context + new_page")
-            self.context = self.browser.new_context(
-                locale="zh-CN",
-                viewport={"width": 1280, "height": 720},
-            )
+            self.context = self.browser.new_context(**_context_kwargs())
             self.context.set_default_timeout(10_000)
             self.context.set_default_navigation_timeout(8_000)
             self.page = self.context.new_page()
